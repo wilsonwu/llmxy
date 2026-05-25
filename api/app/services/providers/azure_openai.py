@@ -5,6 +5,7 @@ from typing import AsyncIterator
 import httpx
 
 from app.core.config import settings
+from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
 
@@ -14,23 +15,24 @@ class AzureOpenAIAdapter:
 
     channel.base_url: https://{resource}.openai.azure.com  (host only, no path)
     channel.api_key_enc: Azure api-key
-    model.upstream_model: deployment name (Azure 用 deployment 决定模型，body.model 字段被忽略)
+    model.upstream_model: deployment name (Azure picks the model via deployment; body.model is ignored)
 
-    Request/response shape (含 SSE) 与 OpenAI 完全一致，只是 URL 和鉴权头不同。
-    api-version 默认走 settings.AZURE_OPENAI_API_VERSION，可整体覆盖。
+    Request/response shape (incl. SSE) matches OpenAI exactly; only URL and auth header differ.
+    api-version defaults to settings.AZURE_OPENAI_API_VERSION and can be overridden globally.
     """
 
     name = "azure"
 
     def _headers(self, channel: Channel) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
-        if channel.api_key_enc:
-            h["api-key"] = channel.api_key_enc
+        key = decrypt(channel.api_key_enc)
+        if key:
+            h["api-key"] = key
         return h
 
     def _url(self, channel: Channel, deployment: str, path: str) -> str:
         base = channel.base_url.rstrip("/")
-        # 若用户填了 /openai 后缀也兼容
+        # tolerate base already ending in /openai
         if not base.endswith("/openai"):
             base = base + "/openai"
         return f"{base}/deployments/{deployment}{path}?api-version={settings.AZURE_OPENAI_API_VERSION}"
@@ -39,6 +41,10 @@ class AzureOpenAIAdapter:
         body = dict(payload)
         body.pop("model", None)  # Azure ignores body.model; deployment in URL decides
         body["stream"] = stream
+        if stream:
+            opts = dict(body.get("stream_options") or {})
+            opts["include_usage"] = True
+            body["stream_options"] = opts
         url = self._url(channel, upstream_model, "/chat/completions")
         headers = self._headers(channel)
 

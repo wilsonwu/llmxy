@@ -12,6 +12,10 @@ export default function RoutesPage() {
   const { data, mutate } = useSWR<R[]>("/api/v1/admin/routes", fetcher);
   const { data: models } = useSWR<M[]>("/api/v1/admin/models", fetcher);
   const [editing, setEditing] = useState<R | null>(null);
+  const [q, setQ] = useState("");
+  const filtered = (data || []).filter(r =>
+    !q || r.user_facing_model.toLowerCase().includes(q.toLowerCase())
+  );
 
   async function save(r: R) {
     if (r.id) await api(`/api/v1/admin/routes/${r.id}`, { method: "PUT", body: JSON.stringify(r) });
@@ -19,25 +23,28 @@ export default function RoutesPage() {
     setEditing(null); mutate();
   }
   async function del(id: number) {
-    if (!confirm("确认删除？")) return;
+    if (!confirm("Delete this route?")) return;
     await api(`/api/v1/admin/routes/${id}`, { method: "DELETE" }); mutate();
   }
   const modelLabel = (id: number) => models?.find((m) => m.id === id)?.code || `#${id}`;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">智能路由</h1>
-        <button className="btn-primary" onClick={() => setEditing({ ...empty, targets_jsonb: [] })}>新增</button>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Smart routing</h1>
+        <div className="flex items-center gap-2">
+          <input className="input" placeholder="Search public model name" value={q} onChange={(e) => setQ(e.target.value)} />
+          <button className="btn-primary" onClick={() => setEditing({ ...empty, targets_jsonb: [] })}>New</button>
+        </div>
       </div>
       <p className="text-xs text-gray-500">
-        strategy: <b>weighted</b> 按权重随机, <b>fallback</b> 按 order 顺序兜底, <b>smart</b> 预留 (当前等价 weighted)
+        strategy: <b>weighted</b> weighted random, <b>fallback</b> ordered fallback by order, <b>smart</b> reserved (currently same as weighted)
       </p>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>对外模型</th><th>策略</th><th>targets</th><th>启用</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Public model</th><th>Strategy</th><th>targets</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
-            {data?.map((r) => (
+            {filtered.map((r) => (
               <tr key={r.id}>
                 <td>{r.id}</td><td>{r.user_facing_model}</td><td>{r.strategy}</td>
                 <td className="text-xs">
@@ -47,8 +54,8 @@ export default function RoutesPage() {
                 </td>
                 <td>{r.enabled ? "✓" : "—"}</td>
                 <td className="space-x-2">
-                  <button className="btn-outline" onClick={() => setEditing({ ...r, targets_jsonb: [...r.targets_jsonb] })}>编辑</button>
-                  <button className="btn-danger" onClick={() => del(r.id!)}>删除</button>
+                  <button className="btn-outline" onClick={() => setEditing({ ...r, targets_jsonb: [...r.targets_jsonb] })}>Edit</button>
+                  <button className="btn-danger" onClick={() => del(r.id!)}>Delete</button>
                 </td>
               </tr>
             ))}
@@ -58,10 +65,10 @@ export default function RoutesPage() {
       {editing && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
           <div className="card w-[640px] space-y-3">
-            <h2 className="text-lg font-semibold">{editing.id ? "编辑" : "新增"}路由</h2>
-            <div><label className="label">对外模型名 (用户调用的 model 字段)</label>
+            <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} route</h2>
+            <div><label className="label">Public model name (the model field users send)</label>
               <input className="input w-full" value={editing.user_facing_model} onChange={(e) => setEditing({ ...editing, user_facing_model: e.target.value })} /></div>
-            <div><label className="label">策略</label>
+            <div><label className="label">Strategy</label>
               <select className="input w-full" value={editing.strategy} onChange={(e) => setEditing({ ...editing, strategy: e.target.value as any })}>
                 <option value="weighted">weighted</option>
                 <option value="smart">smart</option>
@@ -70,7 +77,7 @@ export default function RoutesPage() {
             <div>
               <div className="mb-1 flex items-center justify-between">
                 <label className="label !mb-0">targets</label>
-                <button className="btn-outline text-xs" onClick={() => setEditing({ ...editing, targets_jsonb: [...editing.targets_jsonb, { model_id: models?.[0]?.id || 0, weight: 1, fallback_order: editing.targets_jsonb.length }] })}>+ 添加</button>
+                <button className="btn-outline text-xs" onClick={() => setEditing({ ...editing, targets_jsonb: [...editing.targets_jsonb, { model_id: models?.[0]?.id || 0, weight: 1, fallback_order: editing.targets_jsonb.length }] })}>+ Add</button>
               </div>
               {editing.targets_jsonb.map((t, i) => (
                 <div key={i} className="mb-2 flex items-center gap-2">
@@ -92,11 +99,11 @@ export default function RoutesPage() {
               ))}
             </div>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> 启用
+              <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
             </label>
             <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>取消</button>
-              <button className="btn-primary" onClick={() => save(editing)}>保存</button>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
             </div>
           </div>
         </div>

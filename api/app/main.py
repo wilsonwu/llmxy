@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.relay import chat as relay_chat
 from app.api.relay import embeddings as relay_embeddings
@@ -16,10 +18,37 @@ from app.api.v1.admin import routes as admin_routes
 from app.api.v1.admin import stats as admin_stats
 from app.api.v1.admin import users as admin_users
 from app.core.config import settings
+from app.core.request_ctx import request_id_var
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id_var.get() or "-"
+        return True
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s"))
+_handler.addFilter(_RequestIdFilter())
+logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
+
 
 app = FastAPI(title="llmxy api", version="0.1.0")
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
+        token = request_id_var.set(rid)
+        try:
+            response = await call_next(request)
+        finally:
+            request_id_var.reset(token)
+        response.headers["X-Request-ID"] = rid
+        return response
+
+
+app.add_middleware(RequestIdMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,6 +56,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
 
 

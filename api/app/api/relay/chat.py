@@ -13,8 +13,9 @@ from app.core.deps import get_api_key
 from app.db.session import get_db
 from app.models import ApiKey, Channel, Model, RoutePolicy, UsageLog, User
 from app.services import providers
-from app.services.billing import calc_cost_cents, charge_user, check_balance
-from app.services.quota import rate_limit
+from app.services.billing import calc_cost_cents, charge_user, has_quota
+from app.services.quota import rate_limit, user_rpm
+from app.core.request_ctx import request_id_var
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
@@ -43,10 +44,11 @@ async def chat_completions(
     db: AsyncSession = Depends(get_db),
 ):
     api_key, user = creds
-    ok, msg = check_balance(user, api_key)
+    ok, msg = await has_quota(db, user, api_key)
     if not ok:
         raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, msg)
-    if not await rate_limit(user.id):
+    rpm = await user_rpm(db, user.id)
+    if not await rate_limit(user.id, per_min=rpm):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "rate limit exceeded")
 
     try:
@@ -64,7 +66,7 @@ async def chat_completions(
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no available upstream")
 
-    request_id = f"req-{uuid.uuid4().hex[:16]}"
+    request_id = request_id_var.get() or f"req-{uuid.uuid4().hex[:16]}"
     started = time.time()
     candidates = [(decision.model, decision.channel)] + decision.fallback_chain
 

@@ -213,3 +213,27 @@ class StatsOut(BaseModel):
     requests_today: int
     cost_today_cents: int
     cost_total_cents: int
+
+
+# -------- Subscriptions --------
+class SubscriptionOut(BaseModel):
+    id: int
+    plan_id: int
+    plan_code: Optional[str] = None
+    plan_name: Optional[str] = None
+    start_at: datetime
+    end_at: datetime
+    status: str
+    remaining_cents: int
+
+    class Config:
+        from_attributes = True
+
+
+class UserDetailOut(BaseModel):
+    user: UserOut
+    subscriptions: list[SubscriptionOut]
+    spent_total_cents: int
+    spent_30d_cents: int
+    requests_total: int
+    requests_30d: int

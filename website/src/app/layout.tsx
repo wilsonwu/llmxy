@@ -4,13 +4,13 @@ import Link from "next/link";
 import HeaderNav from "@/components/HeaderNav";
 
 export const metadata: Metadata = {
-  title: "llmxy — AI Token 中转站",
-  description: "统一 Key，多模型，按量计费",
+  title: "llmxy — AI Token Gateway",
+  description: "One key, many models, usage-based billing",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <body>
         <header className="border-b bg-white">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">

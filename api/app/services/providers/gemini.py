@@ -7,6 +7,7 @@ from typing import AsyncIterator
 
 import httpx
 
+from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
 
@@ -79,7 +80,7 @@ class GeminiAdapter:
         base = channel.base_url.rstrip("/")
         if "/v1" not in base:
             base = base + "/v1beta"
-        key = channel.api_key_enc or ""
+        key = decrypt(channel.api_key_enc) or ""
         return f"{base}/models/{upstream_model}:{action}?key={key}"
 
     async def chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
@@ -158,7 +159,7 @@ class GeminiAdapter:
         base = channel.base_url.rstrip("/")
         if "/v1" not in base:
             base = base + "/v1beta"
-        key = channel.api_key_enc or ""
+        key = decrypt(channel.api_key_enc) or ""
         url = f"{base}/models/{upstream_model}:batchEmbedContents?key={key}"
         body = {"requests": [{"model": f"models/{upstream_model}", "content": {"parts": [{"text": t}]}} for t in inputs]}
         async with httpx.AsyncClient(timeout=60) as cli:

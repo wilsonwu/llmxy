@@ -23,16 +23,16 @@ export default function HeaderNav() {
 
   return (
     <nav className="flex items-center gap-4 text-sm">
-      <Link href="/pricing" className="hover:text-brand-600">套餐</Link>
+      <Link href="/pricing" className="hover:text-brand-600">Pricing</Link>
       {authed ? (
         <>
-          <Link href="/dashboard/overview" className="hover:text-brand-600">控制台</Link>
-          <button onClick={logout} className="hover:text-brand-600">退出</button>
+          <Link href="/dashboard/overview" className="hover:text-brand-600">Console</Link>
+          <button onClick={logout} className="hover:text-brand-600">Sign out</button>
         </>
       ) : authed === false ? (
         <>
-          <Link href="/login" className="hover:text-brand-600">登录</Link>
-          <Link href="/register" className="btn-primary !py-1 !px-3 text-xs">免费注册</Link>
+          <Link href="/login" className="hover:text-brand-600">Sign in</Link>
+          <Link href="/register" className="btn-primary !py-1 !px-3 text-xs">Sign up free</Link>
         </>
       ) : null}
     </nav>

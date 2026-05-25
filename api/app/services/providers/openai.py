@@ -5,12 +5,13 @@ from typing import AsyncIterator
 
 import httpx
 
+from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
 
 
 class OpenAIAdapter:
-    """OpenAI-compatible upstream (works for OpenAI, DeepSeek, Moonshot, 通义, Together, etc.).
+    """OpenAI-compatible upstream (works for OpenAI, DeepSeek, Moonshot, Qwen, Together, etc.).
 
     base_url should be the API root (e.g. https://api.openai.com/v1).
     """
@@ -18,8 +19,9 @@ class OpenAIAdapter:
 
     def _headers(self, channel: Channel) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
-        if channel.api_key_enc:
-            h["Authorization"] = f"Bearer {channel.api_key_enc}"
+        key = decrypt(channel.api_key_enc)
+        if key:
+            h["Authorization"] = f"Bearer {key}"
         return h
 
     def _url(self, channel: Channel, path: str) -> str:
@@ -33,6 +35,11 @@ class OpenAIAdapter:
         body = dict(payload)
         body["model"] = upstream_model
         body["stream"] = stream
+        if stream:
+            # require upstream to include usage in the final chunk so we can bill
+            opts = dict(body.get("stream_options") or {})
+            opts["include_usage"] = True
+            body["stream_options"] = opts
         url = self._url(channel, "/chat/completions")
         headers = self._headers(channel)
 

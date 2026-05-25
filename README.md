@@ -1,31 +1,31 @@
 # llmxy
 
-AI Token 中转/分发平台。同一仓库下三个子项目：
+AI Token gateway / dispatcher. Three sub-projects in the same repo:
 
-- `website/` — 用户端 (Next.js 14 + Tailwind + shadcn/ui)
-- `admin/` — 管理端 (Next.js 14 + Tailwind + shadcn/ui)
-- `api/` — 后端 (FastAPI + PostgreSQL + Redis)，直连 OpenAI / Anthropic / Gemini 等上游，对外统一 OpenAI 兼容协议。
+- `website/` — user-facing app (Next.js 14 + Tailwind + shadcn/ui)
+- `admin/` — admin console (Next.js 14 + Tailwind + shadcn/ui)
+- `api/` — backend (FastAPI + PostgreSQL + Redis). Connects directly to upstreams like OpenAI / Anthropic / Gemini, exposing a unified OpenAI-compatible protocol.
 
-## 功能概览
+## Features
 
-| 模块 | 功能 |
+| Module | Features |
 |------|------|
-| website | 注册/登录、套餐订阅、充值、API Key 管理、用量与账单 |
-| admin | 用户/订单管理、上游通道配置、模型与倍率、套餐配置、智能路由策略与权重、统计 |
-| api | OpenAI 兼容 `/v1/chat/completions` `/v1/embeddings` `/v1/models`；鉴权、计费、限流、直连 OpenAI / Anthropic / Gemini 上游 |
+| website | Sign up / sign in, plan subscriptions, top up, API key management, usage & billing |
+| admin | User & order management, upstream channel config, models & rates, plan config, smart routing policies & weights, stats |
+| api | OpenAI-compatible `/v1/chat/completions` `/v1/embeddings` `/v1/models`; auth, billing, rate limiting; direct connections to OpenAI / Anthropic / Gemini |
 
-## 一键启动
+## Quick start
 
 ```bash
-cp .env.example .env        # 按需修改 JWT_SECRET 等
+cp .env.example .env        # edit JWT_SECRET, etc.
 docker compose up -d --build
 ```
 
-- API:     http://localhost:8000  (Swagger: /docs, 健康: /healthz)
+- API:     http://localhost:8000  (Swagger: /docs, health: /healthz)
 - Website: http://localhost:3000
-- Admin:   http://localhost:3001  (默认管理员见 .env: SEED_ADMIN_EMAIL / PASSWORD)
+- Admin:   http://localhost:3001  (default admin in .env: SEED_ADMIN_EMAIL / PASSWORD)
 
-## 本地开发
+## Local development
 
 ```bash
 # API
@@ -36,9 +36,9 @@ cd website && pnpm install && pnpm dev
 cd admin   && pnpm install && pnpm dev
 ```
 
-## 架构
+## Architecture
 
-详见 [docs/architecture.md](docs/architecture.md)。
+See [docs/architecture.md](docs/architecture.md).
 
 ```
 client ──► api (FastAPI) ──► OpenAI / Claude / Gemini / DeepSeek / ...
@@ -46,13 +46,13 @@ client ──► api (FastAPI) ──► OpenAI / Claude / Gemini / DeepSeek / .
 website / admin ──► api
 ```
 
-## 目录
+## Layout
 
 ```
 llmxy/
 ├── api/        # FastAPI
-├── website/    # Next.js 用户端
-├── admin/      # Next.js 管理端
+├── website/    # Next.js user app
+├── admin/      # Next.js admin console
 ├── docs/
 ├── docker-compose.yml
 └── .env.example

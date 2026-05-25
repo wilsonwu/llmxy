@@ -1,12 +1,12 @@
 # llmxy api
 
-FastAPI 后端，提供 OpenAI 兼容 `/v1/*` 转发、用户/管理 REST API、计费。
+FastAPI backend providing OpenAI-compatible `/v1/*` forwarding, user/admin REST APIs, and billing.
 
-## 本地运行
+## Local run
 
 ```bash
 pip install -e ".[dev]"
-export $(cat ../.env | xargs)        # 或拷贝 .env 到当前目录
+export $(cat ../.env | xargs)        # or copy .env into this directory
 alembic upgrade head
 python -m app.scripts.seed
 uvicorn app.main:app --reload

@@ -25,7 +25,7 @@ export default function KeysPage() {
   }
 
   async function del(id: number) {
-    if (!confirm("确认删除？")) return;
+    if (!confirm("Delete this key?")) return;
     await api(`/api/v1/api-keys/${id}`, { method: "DELETE" });
     mutate();
   }
@@ -35,13 +35,13 @@ export default function KeysPage() {
       <h1 className="text-2xl font-bold">API Keys</h1>
       <div className="card">
         <div className="flex gap-2">
-          <input className="input" placeholder="Key 名称" value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="btn-primary" onClick={create}>创建</button>
+          <input className="input" placeholder="Key name" value={name} onChange={(e) => setName(e.target.value)} />
+          <button className="btn-primary" onClick={create}>Create</button>
         </div>
         {err && <p className="mt-2 text-sm text-red-600">{err}</p>}
         {created && (
           <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-4 text-sm">
-            <p className="mb-1 font-semibold">请妥善保存，只显示一次：</p>
+            <p className="mb-1 font-semibold">Save this key — it will only be shown once:</p>
             <code className="break-all">{created}</code>
           </div>
         )}
@@ -49,7 +49,7 @@ export default function KeysPage() {
       <div className="card overflow-x-auto">
         <table className="table">
           <thead>
-            <tr><th>名称</th><th>前缀</th><th>状态</th><th>已用</th><th>配额</th><th></th></tr>
+            <tr><th>Name</th><th>Prefix</th><th>Status</th><th>Used</th><th>Quota</th><th></th></tr>
           </thead>
           <tbody>
             {data?.map((k) => (
@@ -57,12 +57,12 @@ export default function KeysPage() {
                 <td>{k.name}</td>
                 <td><code>{k.key_prefix}…</code></td>
                 <td>{k.status}</td>
-                <td>¥{(k.used_cents / 100).toFixed(4)}</td>
-                <td>{k.quota_cents ? `¥${(k.quota_cents / 100).toFixed(2)}` : "无限制"}</td>
-                <td><button className="text-red-600" onClick={() => del(k.id)}>删除</button></td>
+                <td>${(k.used_cents / 100).toFixed(4)}</td>
+                <td>{k.quota_cents ? `$${(k.quota_cents / 100).toFixed(2)}` : "Unlimited"}</td>
+                <td><button className="text-red-600" onClick={() => del(k.id)}>Delete</button></td>
               </tr>
             ))}
-            {!data?.length && <tr><td colSpan={6} className="text-center text-gray-500">暂无 Key</td></tr>}
+            {!data?.length && <tr><td colSpan={6} className="text-center text-gray-500">No keys yet</td></tr>}
           </tbody>
         </table>
       </div>

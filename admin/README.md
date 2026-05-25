@@ -1,8 +1,8 @@
 # llmxy admin
 
-Next.js 14 管理端。默认管理员账号在根 `.env` 的 `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`。
+Next.js 14 admin console. The default admin credentials come from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` in the root `.env`.
 
 ```bash
 pnpm install
-pnpm dev   # http://localhost:3000  (compose 映射到 3001)
+pnpm dev   # http://localhost:3000  (compose maps to 3001)
 ```

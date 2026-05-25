@@ -1,22 +1,23 @@
 import Link from "next/link";
+import HeroCta from "@/components/HeroCta";
 
 export default function Home() {
   return (
     <div className="space-y-12 py-8">
       <section className="text-center">
-        <h1 className="text-5xl font-bold">一个 Key，调用所有大模型</h1>
+        <h1 className="text-5xl font-bold">One key, every LLM</h1>
         <p className="mt-4 text-lg text-gray-600">
-          兼容 OpenAI SDK，智能路由 GPT、Claude、国内 LLM，按 Token 计费，余额可控。
+          OpenAI SDK compatible. Smart routing across GPT, Claude, and open-source LLMs. Token-level billing with full balance control.
         </p>
         <div className="mt-8 flex justify-center gap-4">
-          <Link href="/register" className="btn-primary">免费开始</Link>
-          <Link href="/pricing" className="btn-outline">查看套餐</Link>
+          <HeroCta />
+          <Link href="/pricing" className="btn-outline">View plans</Link>
         </div>
       </section>
       <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        <Feature title="统一接口" desc="完全兼容 OpenAI /v1/chat/completions，零修改迁移代码。" />
-        <Feature title="智能路由" desc="原生支持 OpenAI / Claude / Gemini，按权重路由 + 自动 fallback。" />
-        <Feature title="按量计费" desc="Token 级精细计费，多档套餐，余额随时查询。" />
+        <Feature title="Unified API" desc="Fully compatible with OpenAI /v1/chat/completions. Migrate without code changes." />
+        <Feature title="Smart routing" desc="Native support for OpenAI / Claude / Gemini, weighted routing with automatic fallback." />
+        <Feature title="Usage-based billing" desc="Fine-grained token-level billing, tiered plans, real-time balance lookups." />
       </section>
     </div>
   );

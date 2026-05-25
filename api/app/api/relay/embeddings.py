@@ -12,7 +12,7 @@ from app.core.deps import get_api_key
 from app.db.session import get_db
 from app.models import ApiKey, UsageLog, User
 from app.services import providers
-from app.services.billing import calc_cost_cents, charge_user, check_balance
+from app.services.billing import calc_cost_cents, charge_user, has_quota
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
@@ -24,7 +24,7 @@ async def embeddings(
     db: AsyncSession = Depends(get_db),
 ):
     api_key, user = creds
-    ok, msg = check_balance(user, api_key)
+    ok, msg = await has_quota(db, user, api_key)
     if not ok:
         raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, msg)
     payload = await request.json()

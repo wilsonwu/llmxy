@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db
-from app.models import User, UserRole, UserStatus
+from app.models import Plan, User, UserRole, UserStatus
 from app.schemas import LoginReq, RegisterReq, TokenResp, UserOut
+from app.services.billing import grant_subscription
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -25,6 +26,12 @@ async def register(req: RegisterReq, db: AsyncSession = Depends(get_db)) -> Toke
         status=UserStatus.active,
     )
     db.add(user)
+    await db.flush()
+
+    free = (await db.execute(select(Plan).where(Plan.code == "free", Plan.active.is_(True)))).scalar_one_or_none()
+    if free and (free.quota_cents or 0) > 0:
+        await grant_subscription(db, user, free, ref_id="signup-free")
+
     await db.commit()
     await db.refresh(user)
     token = create_access_token(user.id, user.role.value)

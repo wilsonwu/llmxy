@@ -7,6 +7,7 @@ from typing import AsyncIterator
 
 import httpx
 
+from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
 
@@ -73,7 +74,7 @@ class AnthropicAdapter:
     def _headers(self, channel: Channel) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
-            "x-api-key": channel.api_key_enc or "",
+            "x-api-key": decrypt(channel.api_key_enc) or "",
             "anthropic-version": "2023-06-01",
         }
 

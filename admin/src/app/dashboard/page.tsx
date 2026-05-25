@@ -7,15 +7,15 @@ type Stats = { users_total: number; api_keys_total: number; requests_today: numb
 export default function Dashboard() {
   const { data } = useSWR<Stats>("/api/v1/admin/stats", fetcher);
   const cards = [
-    { label: "用户数", val: data?.users_total ?? "-" },
+    { label: "Users", val: data?.users_total ?? "-" },
     { label: "API Keys", val: data?.api_keys_total ?? "-" },
-    { label: "今日请求", val: data?.requests_today ?? "-" },
-    { label: "今日消耗", val: data ? `¥${(data.cost_today_cents/100).toFixed(2)}` : "-" },
-    { label: "累计消耗", val: data ? `¥${(data.cost_total_cents/100).toFixed(2)}` : "-" },
+    { label: "Requests today", val: data?.requests_today ?? "-" },
+    { label: "Spend today", val: data ? `$${(data.cost_today_cents/100).toFixed(2)}` : "-" },
+    { label: "Spend total", val: data ? `$${(data.cost_total_cents/100).toFixed(2)}` : "-" },
   ];
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">看板</h1>
+      <h1 className="text-2xl font-bold">Dashboard</h1>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
         {cards.map((c) => (
           <div key={c.label} className="card">

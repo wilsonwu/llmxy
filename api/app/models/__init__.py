@@ -151,10 +151,10 @@ class Model(Base):
     """Sellable model bound to a channel, with billing rates."""
     __tablename__ = "models"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    code: Mapped[str] = mapped_column(String(128), index=True)  # 对外暴露名
+    code: Mapped[str] = mapped_column(String(128), index=True)  # public-facing name
     display_name: Mapped[str] = mapped_column(String(128))
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
-    upstream_model: Mapped[str] = mapped_column(String(128))  # 上游真实模型名
+    upstream_model: Mapped[str] = mapped_column(String(128))  # real upstream model name
     # rate per 1K tokens, stored as 1/10000 cents for precision (i.e. micro-cents).
     # cost_cents = ceil((prompt*pr + completion*cr) / 10000 / 1000)
     prompt_rate: Mapped[int] = mapped_column(BigInteger, default=0)

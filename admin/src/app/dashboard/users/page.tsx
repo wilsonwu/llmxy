@@ -1,5 +1,6 @@
 "use client";
 import useSWR from "swr";
+import Link from "next/link";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 
@@ -15,39 +16,41 @@ export default function UsersPage() {
     mutate();
   }
   async function adjust(u: User) {
-    const v = prompt(`为 ${u.email} 调整余额（分，可负）：`, "100");
+    const v = prompt(`Adjust balance for ${u.email} (cents, may be negative):`, "100");
     if (!v) return;
     await api(`/api/v1/admin/users/${u.id}/balance/adjust?amount_cents=${Number(v)}`, { method: "POST" });
     mutate();
   }
   async function reset(u: User) {
-    const v = prompt(`为 ${u.email} 重置密码（≥6 位）：`);
+    const v = prompt(`Reset password for ${u.email} (>= 6 chars):`);
     if (!v) return;
     await api(`/api/v1/admin/users/${u.id}/reset-password?new_password=${encodeURIComponent(v)}`, { method: "POST" });
-    alert("已重置");
+    alert("Password reset");
   }
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">用户管理</h1>
+      <h1 className="text-2xl font-bold">Users</h1>
       <div className="flex gap-2">
-        <input className="input" placeholder="搜索邮箱" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input" placeholder="Search email" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>邮箱</th><th>角色</th><th>余额</th><th>状态</th><th>注册</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Balance</th><th>Status</th><th>Registered</th><th></th></tr></thead>
           <tbody>
             {data?.items?.map((u) => (
               <tr key={u.id}>
                 <td>{u.id}</td>
-                <td>{u.email}</td>
+                <td>
+                  <Link href={`/dashboard/users/${u.id}`} className="text-brand-600 hover:underline">{u.email}</Link>
+                </td>
                 <td>{u.role}</td>
-                <td>¥{(u.balance_cents/100).toFixed(2)}</td>
+                <td>${(u.balance_cents/100).toFixed(2)}</td>
                 <td>{u.status}</td>
                 <td>{new Date(u.created_at).toLocaleString()}</td>
                 <td className="space-x-2">
-                  <button className="btn-outline" onClick={() => adjust(u)}>调整余额</button>
-                  <button className="btn-outline" onClick={() => reset(u)}>改密</button>
-                  <button className="btn-danger" onClick={() => toggle(u)}>{u.status === "active" ? "停用" : "启用"}</button>
+                  <button className="btn-outline" onClick={() => adjust(u)}>Adjust balance</button>
+                  <button className="btn-outline" onClick={() => reset(u)}>Reset password</button>
+                  <button className="btn-danger" onClick={() => toggle(u)}>{u.status === "active" ? "Disable" : "Enable"}</button>
                 </td>
               </tr>
             ))}

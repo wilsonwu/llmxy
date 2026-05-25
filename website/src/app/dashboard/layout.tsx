@@ -5,12 +5,12 @@ import { useEffect } from "react";
 import { getToken, setToken } from "@/lib/api";
 
 const items = [
-  { href: "/dashboard/overview", label: "概览" },
-  { href: "/dashboard/keys", label: "API Key" },
-  { href: "/dashboard/usage", label: "用量" },
-  { href: "/dashboard/billing", label: "账单" },
-  { href: "/dashboard/topup", label: "充值" },
-  { href: "/dashboard/settings", label: "设置" },
+  { href: "/dashboard/overview", label: "Overview" },
+  { href: "/dashboard/keys", label: "API Keys" },
+  { href: "/dashboard/usage", label: "Usage" },
+  { href: "/dashboard/billing", label: "Billing" },
+  { href: "/dashboard/topup", label: "Top up" },
+  { href: "/dashboard/settings", label: "Settings" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -38,7 +38,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             onClick={() => { setToken(null); router.push("/login"); }}
             className="mt-4 block w-full rounded px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
           >
-            退出登录
+            Sign out
           </button>
         </nav>
       </aside>

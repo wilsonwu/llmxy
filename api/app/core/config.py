@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # Azure OpenAI default api-version (channel-level override planned via extra config)
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
 
+    # Encryption key for upstream secrets (channels.api_key_enc).
+    # Any string accepted — SHA-256 derives a Fernet key. Empty = dev plaintext mode.
+    ENCRYPTION_KEY: str = ""
+
+    # Default per-user requests-per-minute when plan provides none
+    DEFAULT_RATE_LIMIT_RPM: int = 600
+
     # Payments
     ALIPAY_APP_ID: str = ""
     ALIPAY_PRIVATE_KEY: str = ""

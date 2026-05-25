@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import require_admin
 from app.core.security import hash_password
 from app.db.session import get_db
-from app.models import User, UserStatus
-from app.schemas import PaginatedResp, UserOut
+from app.models import Plan, Subscription, UsageLog, User, UserStatus
+from app.schemas import PaginatedResp, SubscriptionOut, UserDetailOut, UserOut
 
 router = APIRouter(prefix="/users", tags=["admin-users"])
 
@@ -97,3 +99,62 @@ async def reset_password(
     u.password_hash = hash_password(new_password)
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/{user_id}/detail", response_model=UserDetailOut)
+async def user_detail(
+    user_id: int,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    u = await db.get(User, user_id)
+    if not u:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+
+    sub_rows = (
+        await db.execute(
+            select(Subscription, Plan.code, Plan.name)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .where(Subscription.user_id == user_id)
+            .order_by(desc(Subscription.id))
+        )
+    ).all()
+    subs: list[SubscriptionOut] = []
+    for sub, code, name in sub_rows:
+        item = SubscriptionOut.model_validate(sub)
+        item.plan_code = code
+        item.plan_name = name
+        subs.append(item)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    spent_total = (
+        await db.execute(
+            select(func.coalesce(func.sum(UsageLog.cost_cents), 0)).where(UsageLog.user_id == user_id)
+        )
+    ).scalar_one()
+    spent_30d = (
+        await db.execute(
+            select(func.coalesce(func.sum(UsageLog.cost_cents), 0)).where(
+                UsageLog.user_id == user_id, UsageLog.created_at >= cutoff
+            )
+        )
+    ).scalar_one()
+    req_total = (
+        await db.execute(select(func.count(UsageLog.id)).where(UsageLog.user_id == user_id))
+    ).scalar_one()
+    req_30d = (
+        await db.execute(
+            select(func.count(UsageLog.id)).where(
+                UsageLog.user_id == user_id, UsageLog.created_at >= cutoff
+            )
+        )
+    ).scalar_one()
+
+    return UserDetailOut(
+        user=UserOut.model_validate(u),
+        subscriptions=subs,
+        spent_total_cents=int(spent_total or 0),
+        spent_30d_cents=int(spent_30d or 0),
+        requests_total=int(req_total or 0),
+        requests_30d=int(req_30d or 0),
+    )

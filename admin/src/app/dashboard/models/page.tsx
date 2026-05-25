@@ -11,6 +11,10 @@ export default function ModelsPage() {
   const { data, mutate } = useSWR<M[]>("/api/v1/admin/models", fetcher);
   const { data: channels } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
   const [editing, setEditing] = useState<M | null>(null);
+  const [q, setQ] = useState("");
+  const filtered = (data || []).filter(m =>
+    !q || m.code.toLowerCase().includes(q.toLowerCase()) || m.upstream_model.toLowerCase().includes(q.toLowerCase()) || m.display_name.toLowerCase().includes(q.toLowerCase())
+  );
 
   async function save(m: M) {
     if (m.id) await api(`/api/v1/admin/models/${m.id}`, { method: "PUT", body: JSON.stringify(m) });
@@ -18,31 +22,34 @@ export default function ModelsPage() {
     setEditing(null); mutate();
   }
   async function del(id: number) {
-    if (!confirm("确认删除？")) return;
+    if (!confirm("Delete this model?")) return;
     await api(`/api/v1/admin/models/${id}`, { method: "DELETE" }); mutate();
   }
   const chName = (id: number) => channels?.find((c) => c.id === id)?.name || `#${id}`;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">模型 / 倍率</h1>
-        <button className="btn-primary" onClick={() => setEditing({ ...empty, channel_id: channels?.[0]?.id || 0 })}>新增</button>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Models / Rates</h1>
+        <div className="flex items-center gap-2">
+          <input className="input" placeholder="Search code/upstream/display name" value={q} onChange={(e) => setQ(e.target.value)} />
+          <button className="btn-primary" onClick={() => setEditing({ ...empty, channel_id: channels?.[0]?.id || 0 })}>New</button>
+        </div>
       </div>
-      <p className="text-xs text-gray-500">rate 单位：微分(1/10000 分) / 1K tokens。例 1500 ≈ $0.00015/1K。</p>
+      <p className="text-xs text-gray-500">rate unit: micro-cents (1/10000 cent) / 1K tokens. e.g. 1500 ≈ $0.00015/1K.</p>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>显示名</th><th>通道</th><th>上游模型</th><th>prompt_rate</th><th>completion_rate</th><th>启用</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>prompt_rate</th><th>completion_rate</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
-            {data?.map((m) => (
+            {filtered.map((m) => (
               <tr key={m.id}>
                 <td>{m.id}</td><td>{m.code}</td><td>{m.display_name}</td>
                 <td>{chName(m.channel_id)}</td><td>{m.upstream_model}</td>
                 <td>{m.prompt_rate}</td><td>{m.completion_rate}</td>
                 <td>{m.enabled ? "✓" : "—"}</td>
                 <td className="space-x-2">
-                  <button className="btn-outline" onClick={() => setEditing({ ...m })}>编辑</button>
-                  <button className="btn-danger" onClick={() => del(m.id!)}>删除</button>
+                  <button className="btn-outline" onClick={() => setEditing({ ...m })}>Edit</button>
+                  <button className="btn-danger" onClick={() => del(m.id!)}>Delete</button>
                 </td>
               </tr>
             ))}
@@ -52,8 +59,8 @@ export default function ModelsPage() {
       {editing && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
           <div className="card w-[500px] space-y-3">
-            <h2 className="text-lg font-semibold">{editing.id ? "编辑" : "新增"}模型</h2>
-            <div><label className="label">code (对外暴露名)</label>
+            <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} model</h2>
+            <div><label className="label">code (public-facing name)</label>
               <input className="input w-full" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value })} /></div>
             <div><label className="label">display_name</label>
               <input className="input w-full" value={editing.display_name} onChange={(e) => setEditing({ ...editing, display_name: e.target.value })} /></div>
@@ -69,12 +76,12 @@ export default function ModelsPage() {
               <div className="flex-1"><label className="label">completion_rate</label>
                 <input type="number" className="input w-full" value={editing.completion_rate} onChange={(e) => setEditing({ ...editing, completion_rate: +e.target.value })} /></div>
               <label className="flex items-center gap-2 pt-5">
-                <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> 启用
+                <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
               </label>
             </div>
             <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>取消</button>
-              <button className="btn-primary" onClick={() => save(editing)}>保存</button>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
             </div>
           </div>
         </div>

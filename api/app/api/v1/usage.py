@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
 from app.db.session import get_db
-from app.models import BalanceTx, UsageLog, User
-from app.schemas import BalanceTxOut, PaginatedResp, UsageLogOut
+from app.models import BalanceTx, Plan, Subscription, UsageLog, User
+from app.schemas import BalanceTxOut, PaginatedResp, SubscriptionOut, UsageLogOut
 
 router = APIRouter(prefix="/usage", tags=["usage"])
 
@@ -46,3 +46,25 @@ async def my_balance_tx(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/subscriptions", response_model=list[SubscriptionOut])
+async def my_subscriptions(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(Subscription, Plan.code, Plan.name)
+            .join(Plan, Plan.id == Subscription.plan_id)
+            .where(Subscription.user_id == user.id)
+            .order_by(desc(Subscription.id))
+        )
+    ).all()
+    out: list[SubscriptionOut] = []
+    for sub, code, name in rows:
+        item = SubscriptionOut.model_validate(sub)
+        item.plan_code = code
+        item.plan_name = name
+        out.append(item)
+    return out

@@ -18,7 +18,7 @@ export default function AdminLogin() {
         body: JSON.stringify({ email, password }),
         skipAuth: true,
       });
-      if (r.role !== "admin") { setErr("需要管理员账号"); return; }
+      if (r.role !== "admin") { setErr("Admin account required"); return; }
       setToken(r.access_token);
       router.push("/dashboard");
     } catch (e: any) { setErr(e.message); }
@@ -27,17 +27,17 @@ export default function AdminLogin() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-100">
       <form onSubmit={onSubmit} className="card w-96 space-y-4">
-        <h1 className="text-xl font-bold">llmxy 管理后台</h1>
+        <h1 className="text-xl font-bold">llmxy Admin</h1>
         <div>
-          <label className="label">邮箱</label>
+          <label className="label">Email</label>
           <input className="input w-full" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
         <div>
-          <label className="label">密码</label>
+          <label className="label">Password</label>
           <input className="input w-full" type="password" value={password} onChange={(e) => setPw(e.target.value)} required />
         </div>
         {err && <p className="text-sm text-red-600">{err}</p>}
-        <button className="btn-primary w-full">登录</button>
+        <button className="btn-primary w-full">Sign in</button>
       </form>
     </div>
   );

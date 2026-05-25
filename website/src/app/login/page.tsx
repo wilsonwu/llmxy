@@ -1,13 +1,17 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, setToken } from "@/lib/api";
+import { api, getToken, setToken } from "@/lib/api";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPw] = useState("");
   const [err, setErr] = useState("");
   const router = useRouter();
+
+  useEffect(() => {
+    if (getToken()) router.replace("/dashboard/overview");
+  }, [router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -27,20 +31,20 @@ export default function LoginPage() {
 
   return (
     <div className="mx-auto max-w-md">
-      <h1 className="mb-6 text-2xl font-bold">登录</h1>
+      <h1 className="mb-6 text-2xl font-bold">Sign in</h1>
       <form onSubmit={onSubmit} className="card space-y-4">
         <div>
-          <label className="label">邮箱</label>
+          <label className="label">Email</label>
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
         <div>
-          <label className="label">密码</label>
+          <label className="label">Password</label>
           <input className="input" type="password" value={password} onChange={(e) => setPw(e.target.value)} required />
         </div>
         {err && <p className="text-sm text-red-600">{err}</p>}
-        <button className="btn-primary w-full">登录</button>
+        <button className="btn-primary w-full">Sign in</button>
         <p className="text-center text-sm text-gray-500">
-          还没有账号？<a href="/register" className="text-brand-600">注册</a>
+          No account yet? <a href="/register" className="text-brand-600">Sign up</a>
         </p>
       </form>
     </div>

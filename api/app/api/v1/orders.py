@@ -10,7 +10,7 @@ from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models import Order, OrderStatus, PaymentChannel, Plan, User
 from app.schemas import OrderCreate, OrderOut, PaymentInitResp
-from app.services.billing import topup
+from app.services.billing import grant_subscription, topup_wallet
 from app.services.payment import get_provider
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -85,7 +85,14 @@ async def payment_callback(
     order.paid_at = datetime.now(timezone.utc)
     order.provider_order_id = provider_order_id
     user = await db.get(User, order.user_id)
-    await topup(db, user, order.amount_cents, ref_id=str(order.id), note=f"order#{order.id} {channel}")
+    if order.plan_id:
+        plan = await db.get(Plan, order.plan_id)
+        if plan:
+            await grant_subscription(db, user, plan, ref_id=str(order.id))
+        else:
+            await topup_wallet(db, user, order.amount_cents, ref_id=str(order.id), note=f"order#{order.id} {channel}")
+    else:
+        await topup_wallet(db, user, order.amount_cents, ref_id=str(order.id), note=f"order#{order.id} {channel}")
     await db.commit()
     return {"ok": True}
 
@@ -104,6 +111,13 @@ async def mock_pay(channel: str, order_id: int, db: AsyncSession = Depends(get_d
         order.paid_at = datetime.now(timezone.utc)
         order.provider_order_id = f"mock-{channel}-{order.id}"
         user = await db.get(User, order.user_id)
-        await topup(db, user, order.amount_cents, ref_id=str(order.id), note=f"mock {channel}")
+        if order.plan_id:
+            plan = await db.get(Plan, order.plan_id)
+            if plan:
+                await grant_subscription(db, user, plan, ref_id=str(order.id))
+            else:
+                await topup_wallet(db, user, order.amount_cents, ref_id=str(order.id), note=f"mock {channel}")
+        else:
+            await topup_wallet(db, user, order.amount_cents, ref_id=str(order.id), note=f"mock {channel}")
         await db.commit()
     return {"ok": True, "order_id": order.id, "status": order.status.value}

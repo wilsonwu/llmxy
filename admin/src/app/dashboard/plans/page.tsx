@@ -16,29 +16,29 @@ export default function PlansPage() {
     setEditing(null); mutate();
   }
   async function del(id: number) {
-    if (!confirm("确认删除？")) return;
+    if (!confirm("Delete this plan?")) return;
     await api(`/api/v1/admin/plans/${id}`, { method: "DELETE" }); mutate();
   }
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">套餐</h1>
-        <button className="btn-primary" onClick={() => setEditing({ ...empty })}>新增</button>
+        <h1 className="text-2xl font-bold">Plans</h1>
+        <button className="btn-primary" onClick={() => setEditing({ ...empty })}>New</button>
       </div>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>名称</th><th>价格</th><th>额度</th><th>有效期</th><th>启用</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Price</th><th>Quota</th><th>Duration</th><th>Active</th><th></th></tr></thead>
           <tbody>
             {data?.map((p) => (
               <tr key={p.id}>
                 <td>{p.id}</td><td>{p.code}</td><td>{p.name}</td>
-                <td>¥{(p.price_cents/100).toFixed(2)}</td>
-                <td>¥{(p.quota_cents/100).toFixed(2)}</td>
-                <td>{p.duration_days}天</td>
+                <td>${(p.price_cents/100).toFixed(2)}</td>
+                <td>${(p.quota_cents/100).toFixed(2)}</td>
+                <td>{p.duration_days}d</td>
                 <td>{p.active ? "✓" : "—"}</td>
                 <td className="space-x-2">
-                  <button className="btn-outline" onClick={() => setEditing({ ...p })}>编辑</button>
-                  <button className="btn-danger" onClick={() => del(p.id!)}>删除</button>
+                  <button className="btn-outline" onClick={() => setEditing({ ...p })}>Edit</button>
+                  <button className="btn-danger" onClick={() => del(p.id!)}>Delete</button>
                 </td>
               </tr>
             ))}
@@ -48,25 +48,25 @@ export default function PlansPage() {
       {editing && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
           <div className="card w-[500px] space-y-3">
-            <h2 className="text-lg font-semibold">{editing.id ? "编辑" : "新增"}套餐</h2>
+            <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} plan</h2>
             {(["code", "name", "description"] as const).map((k) => (
               <div key={k}><label className="label">{k}</label>
                 <input className="input w-full" value={(editing as any)[k] || ""} onChange={(e) => setEditing({ ...editing, [k]: e.target.value })} /></div>
             ))}
             <div className="flex gap-3">
-              <div className="flex-1"><label className="label">price (分)</label>
+              <div className="flex-1"><label className="label">price (cents)</label>
                 <input type="number" className="input w-full" value={editing.price_cents} onChange={(e) => setEditing({ ...editing, price_cents: +e.target.value })} /></div>
-              <div className="flex-1"><label className="label">quota (分)</label>
+              <div className="flex-1"><label className="label">quota (cents)</label>
                 <input type="number" className="input w-full" value={editing.quota_cents} onChange={(e) => setEditing({ ...editing, quota_cents: +e.target.value })} /></div>
-              <div className="flex-1"><label className="label">duration (天)</label>
+              <div className="flex-1"><label className="label">duration (days)</label>
                 <input type="number" className="input w-full" value={editing.duration_days} onChange={(e) => setEditing({ ...editing, duration_days: +e.target.value })} /></div>
             </div>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={editing.active} onChange={(e) => setEditing({ ...editing, active: e.target.checked })} /> 启用
+              <input type="checkbox" checked={editing.active} onChange={(e) => setEditing({ ...editing, active: e.target.checked })} /> Active
             </label>
             <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>取消</button>
-              <button className="btn-primary" onClick={() => save(editing)}>保存</button>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
             </div>
           </div>
         </div>

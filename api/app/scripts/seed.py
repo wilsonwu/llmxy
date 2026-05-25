@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
-from app.models import Channel, Plan, RoutePolicy, RouteStrategy, User, UserRole, Model
+from app.models import Channel, Plan, RoutePolicy, RouteStrategy, Subscription, User, UserRole, Model
+from app.services.billing import grant_subscription
 
 
 async def seed() -> None:
@@ -28,7 +30,7 @@ async def seed() -> None:
         # demo plan
         plan = (await db.execute(select(Plan).where(Plan.code == "free"))).scalar_one_or_none()
         if not plan:
-            db.add(Plan(code="free", name="免费体验", price_cents=0, quota_cents=1_00, duration_days=30))
+            db.add(Plan(code="free", name="Free trial", price_cents=0, quota_cents=1_00, duration_days=30))
 
         # demo channel
         ch = (await db.execute(select(Channel).where(Channel.name == "default-openai"))).scalar_one_or_none()
@@ -71,6 +73,26 @@ async def seed() -> None:
             )
 
         await db.commit()
+
+        # Backfill: grant free trial to any user that has no active subscription.
+        free = (await db.execute(select(Plan).where(Plan.code == "free", Plan.active.is_(True)))).scalar_one_or_none()
+        if free and (free.quota_cents or 0) > 0:
+            now = datetime.now(timezone.utc)
+            users = (await db.execute(select(User))).scalars().all()
+            for u in users:
+                has_active = (
+                    await db.execute(
+                        select(Subscription.id).where(
+                            Subscription.user_id == u.id,
+                            Subscription.status == "active",
+                            Subscription.end_at > now,
+                            Subscription.remaining_cents > 0,
+                        )
+                    )
+                ).first()
+                if not has_active:
+                    await grant_subscription(db, u, free, ref_id="seed-backfill")
+            await db.commit()
 
 
 if __name__ == "__main__":
