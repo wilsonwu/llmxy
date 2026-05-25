@@ -12,7 +12,7 @@ from app.api.internal import translate as internal_translate
 from app.api.relay import chat as relay_chat
 from app.api.relay import embeddings as relay_embeddings
 from app.api.relay import models_list as relay_models
-from app.api.v1 import api_keys, auth, orders, plans, transport, usage
+from app.api.v1 import api_keys, auth, orders, plans, subscriptions, transport, usage
 from app.api.v1.admin import channels as admin_channels
 from app.api.v1.admin import envoy as admin_envoy
 from app.api.v1.admin import models as admin_models
@@ -77,6 +77,7 @@ app.include_router(orders.router, prefix=V1)
 app.include_router(orders.payments_router, prefix=V1)
 app.include_router(usage.router, prefix=V1)
 app.include_router(transport.router, prefix=V1)
+app.include_router(subscriptions.router, prefix=V1)
 
 # admin
 ADMIN = "/api/v1/admin"
@@ -131,6 +132,13 @@ async def startup() -> None:
     except Exception as e:
         logging.warning("ALS server failed to start (continuing): %s", e)
 
+    # Subscription renewal worker (auto-charge wallet on period boundary).
+    try:
+        from app.services import subscriptions_renewal
+        await subscriptions_renewal.start()
+    except Exception as e:
+        logging.warning("renewal worker failed to start (continuing): %s", e)
+
     # Report transport state so operators see at a glance whether envoy
     # is taking traffic or whether the api-direct path is the only one up.
     try:
@@ -164,5 +172,10 @@ async def shutdown() -> None:
     try:
         from app.services.envoy import als_server
         await als_server.stop()
+    except Exception:
+        pass
+    try:
+        from app.services import subscriptions_renewal
+        await subscriptions_renewal.stop()
     except Exception:
         pass

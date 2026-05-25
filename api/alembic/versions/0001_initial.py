@@ -50,6 +50,7 @@ def upgrade() -> None:
         sa.Column("code", sa.String(64), unique=True, index=True),
         sa.Column("name", sa.String(128)),
         sa.Column("description", sa.Text),
+        sa.Column("plan_type", sa.String(16), nullable=False, server_default="recurring"),
         sa.Column("price_cents", sa.Integer, server_default="0"),
         sa.Column("quota_cents", sa.BigInteger, server_default="0"),
         sa.Column("duration_days", sa.Integer, server_default="30"),
@@ -65,9 +66,14 @@ def upgrade() -> None:
         sa.Column("user_id", sa.BigInteger, sa.ForeignKey("users.id", ondelete="CASCADE"), index=True),
         sa.Column("plan_id", sa.Integer, sa.ForeignKey("plans.id")),
         sa.Column("start_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column("end_at", sa.DateTime(timezone=True)),
+        sa.Column("current_period_start", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column("current_period_end", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(32), server_default="active"),
         sa.Column("remaining_cents", sa.BigInteger, server_default="0"),
+        sa.Column("cancel_at_period_end", sa.Boolean, nullable=False, server_default=sa.false()),
+        sa.Column("canceled_at", sa.DateTime(timezone=True)),
+        sa.Column("last_renewal_at", sa.DateTime(timezone=True)),
+        sa.Column("last_renewal_error", sa.String(256)),
     )
 
     op.create_table(

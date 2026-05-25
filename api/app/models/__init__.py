@@ -63,6 +63,11 @@ class BalanceTxType(str, enum.Enum):
     grant = "grant"
 
 
+class PlanType(str, enum.Enum):
+    recurring = "recurring"   # monthly auto-renew, charged per cycle
+    one_time = "one_time"     # fixed duration, charged once, then expires
+
+
 class EnvoyStatus(str, enum.Enum):
     stopped = "stopped"
     starting = "starting"
@@ -107,6 +112,9 @@ class Plan(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[Optional[str]] = mapped_column(Text)
+    # recurring: price_cents is per-cycle (monthly), duration_days ignored.
+    # one_time: price_cents charged once, duration_days = lifetime, no renewal.
+    plan_type: Mapped[str] = mapped_column(String(16), default="recurring", nullable=False)
     price_cents: Mapped[int] = mapped_column(Integer, default=0)
     quota_cents: Mapped[int] = mapped_column(BigInteger, default=0)
     duration_days: Mapped[int] = mapped_column(Integer, default=30)
@@ -122,9 +130,16 @@ class Subscription(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"))
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Current billing period. Renewal advances both fields and refills remaining_cents.
+    current_period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    current_period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # status: active | past_due | canceled | expired
     status: Mapped[str] = mapped_column(String(32), default="active")
     remaining_cents: Mapped[int] = mapped_column(BigInteger, default=0)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    canceled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_renewal_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_renewal_error: Mapped[Optional[str]] = mapped_column(String(256))
 
 
 class Order(Base):

@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
 const CHANNELS = [
@@ -9,10 +10,17 @@ const CHANNELS = [
 ];
 
 export default function TopupPage() {
-  const [amount, setAmount] = useState(100);
+  const sp = useSearchParams();
+  const planIdParam = sp.get("plan_id");
+  const amountParam = sp.get("amount");
+  const [amount, setAmount] = useState(amountParam ? Number(amountParam) : 100);
   const [channel, setChannel] = useState("alipay");
   const [resp, setResp] = useState<any>(null);
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (amountParam) setAmount(Number(amountParam));
+  }, [amountParam]);
 
   async function pay() {
     setErr("");
@@ -28,6 +36,12 @@ export default function TopupPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Top up</h1>
+      {planIdParam && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">
+          You were redirected here because your balance was not enough to subscribe to plan #{planIdParam}.
+          Top up at least ${amount.toFixed(2)}, then return to <a href="/pricing" className="underline">Pricing</a> and click Subscribe again.
+        </div>
+      )}
       <div className="card space-y-4">
         <div>
           <label className="label">Amount</label>

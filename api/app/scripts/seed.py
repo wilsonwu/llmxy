@@ -85,7 +85,7 @@ async def seed() -> None:
                         select(Subscription.id).where(
                             Subscription.user_id == u.id,
                             Subscription.status == "active",
-                            Subscription.end_at > now,
+                            Subscription.current_period_end > now,
                             Subscription.remaining_cents > 0,
                         )
                     )

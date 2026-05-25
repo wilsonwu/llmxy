@@ -3,8 +3,8 @@ import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 
-type P = { id?: number; code: string; name: string; description?: string; price_cents: number; quota_cents: number; duration_days: number; active: boolean };
-const empty: P = { code: "", name: "", description: "", price_cents: 0, quota_cents: 0, duration_days: 30, active: true };
+type P = { id?: number; code: string; name: string; description?: string; plan_type: "recurring" | "one_time"; price_cents: number; quota_cents: number; duration_days: number; active: boolean };
+const empty: P = { code: "", name: "", description: "", plan_type: "recurring", price_cents: 0, quota_cents: 0, duration_days: 30, active: true };
 
 export default function PlansPage() {
   const { data, mutate } = useSWR<P[]>("/api/v1/admin/plans", fetcher);
@@ -27,14 +27,15 @@ export default function PlansPage() {
       </div>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Price</th><th>Quota</th><th>Duration</th><th>Active</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Type</th><th>Price</th><th>Quota</th><th>Duration</th><th>Active</th><th></th></tr></thead>
           <tbody>
             {data?.map((p) => (
               <tr key={p.id}>
                 <td>{p.id}</td><td>{p.code}</td><td>{p.name}</td>
-                <td>${(p.price_cents/100).toFixed(2)}</td>
+                <td>{p.plan_type === "one_time" ? "one-time" : "monthly"}</td>
+                <td>${(p.price_cents/100).toFixed(2)}{p.plan_type === "recurring" && <span className="text-xs text-gray-500"> /mo</span>}</td>
                 <td>${(p.quota_cents/100).toFixed(2)}</td>
-                <td>{p.duration_days}d</td>
+                <td>{p.plan_type === "one_time" ? `${p.duration_days}d` : "—"}</td>
                 <td>{p.active ? "✓" : "—"}</td>
                 <td className="space-x-2">
                   <button className="btn-outline" onClick={() => setEditing({ ...p })}>Edit</button>
@@ -53,13 +54,22 @@ export default function PlansPage() {
               <div key={k}><label className="label">{k}</label>
                 <input className="input w-full" value={(editing as any)[k] || ""} onChange={(e) => setEditing({ ...editing, [k]: e.target.value })} /></div>
             ))}
+            <div>
+              <label className="label">type</label>
+              <select className="input w-full" value={editing.plan_type} onChange={(e) => setEditing({ ...editing, plan_type: e.target.value as "recurring" | "one_time" })}>
+                <option value="recurring">recurring — charged every month, quota resets on the 1st</option>
+                <option value="one_time">one-time — single charge, expires after N days</option>
+              </select>
+            </div>
             <div className="flex gap-3">
-              <div className="flex-1"><label className="label">price (cents)</label>
+              <div className="flex-1"><label className="label">price (cents){editing.plan_type === "recurring" ? " / month" : ""}</label>
                 <input type="number" className="input w-full" value={editing.price_cents} onChange={(e) => setEditing({ ...editing, price_cents: +e.target.value })} /></div>
-              <div className="flex-1"><label className="label">quota (cents)</label>
+              <div className="flex-1"><label className="label">quota (cents){editing.plan_type === "recurring" ? " / cycle" : ""}</label>
                 <input type="number" className="input w-full" value={editing.quota_cents} onChange={(e) => setEditing({ ...editing, quota_cents: +e.target.value })} /></div>
-              <div className="flex-1"><label className="label">duration (days)</label>
-                <input type="number" className="input w-full" value={editing.duration_days} onChange={(e) => setEditing({ ...editing, duration_days: +e.target.value })} /></div>
+              {editing.plan_type === "one_time" && (
+                <div className="flex-1"><label className="label">duration (days)</label>
+                  <input type="number" className="input w-full" value={editing.duration_days} onChange={(e) => setEditing({ ...editing, duration_days: +e.target.value })} /></div>
+              )}
             </div>
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={editing.active} onChange={(e) => setEditing({ ...editing, active: e.target.checked })} /> Active

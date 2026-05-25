@@ -65,6 +65,7 @@ class PlanIn(BaseModel):
     code: str
     name: str
     description: Optional[str] = None
+    plan_type: str = "recurring"  # "recurring" | "one_time"
     price_cents: int = 0
     quota_cents: int = 0
     duration_days: int = 30
@@ -221,10 +222,16 @@ class SubscriptionOut(BaseModel):
     plan_id: int
     plan_code: Optional[str] = None
     plan_name: Optional[str] = None
+    plan_type: Optional[str] = None
     start_at: datetime
-    end_at: datetime
+    current_period_start: datetime
+    current_period_end: datetime
     status: str
     remaining_cents: int
+    cancel_at_period_end: bool = False
+    canceled_at: Optional[datetime] = None
+    last_renewal_at: Optional[datetime] = None
+    last_renewal_error: Optional[str] = None
 
     class Config:
         from_attributes = True

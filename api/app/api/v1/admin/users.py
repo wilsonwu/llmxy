@@ -113,17 +113,18 @@ async def user_detail(
 
     sub_rows = (
         await db.execute(
-            select(Subscription, Plan.code, Plan.name)
+            select(Subscription, Plan.code, Plan.name, Plan.plan_type)
             .join(Plan, Plan.id == Subscription.plan_id)
             .where(Subscription.user_id == user_id)
             .order_by(desc(Subscription.id))
         )
     ).all()
     subs: list[SubscriptionOut] = []
-    for sub, code, name in sub_rows:
+    for sub, code, name, ptype in sub_rows:
         item = SubscriptionOut.model_validate(sub)
         item.plan_code = code
         item.plan_name = name
+        item.plan_type = ptype
         subs.append(item)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)

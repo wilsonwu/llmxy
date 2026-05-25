@@ -55,16 +55,17 @@ async def my_subscriptions(
 ):
     rows = (
         await db.execute(
-            select(Subscription, Plan.code, Plan.name)
+            select(Subscription, Plan.code, Plan.name, Plan.plan_type)
             .join(Plan, Plan.id == Subscription.plan_id)
             .where(Subscription.user_id == user.id)
             .order_by(desc(Subscription.id))
         )
     ).all()
     out: list[SubscriptionOut] = []
-    for sub, code, name in rows:
+    for sub, code, name, ptype in rows:
         item = SubscriptionOut.model_validate(sub)
         item.plan_code = code
         item.plan_name = name
+        item.plan_type = ptype
         out.append(item)
     return out

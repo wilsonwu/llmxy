@@ -31,9 +31,9 @@ async def user_rpm(db: AsyncSession, user_id: int) -> int:
             .where(
                 Subscription.user_id == user_id,
                 Subscription.status == "active",
-                Subscription.end_at > now,
+                Subscription.current_period_end > now,
             )
-            .order_by(Subscription.end_at.desc())
+            .order_by(Subscription.current_period_end.desc())
             .limit(1)
         )
     ).first()

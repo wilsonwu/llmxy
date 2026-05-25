@@ -35,11 +35,19 @@ export async function api<T = any>(
   }
   if (!res.ok) {
     let msg = res.statusText;
+    let body: any = undefined;
     try {
-      const j = await res.json();
-      msg = j?.detail || j?.message || msg;
+      body = await res.json();
+      const d = body?.detail;
+      if (typeof d === "string") msg = d;
+      else if (d?.message) msg = d.message;
+      else if (body?.message) msg = body.message;
     } catch {}
-    throw new Error(`${res.status}: ${msg}`);
+    const err: any = new Error(`${res.status}: ${msg}`);
+    err.status = res.status;
+    err.body = body;
+    err.detail = body?.detail;
+    throw err;
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
