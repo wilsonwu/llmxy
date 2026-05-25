@@ -27,13 +27,84 @@ docker compose up -d --build
 
 ## Local development
 
-```bash
-# API
-cd api && pip install -e . && uvicorn app.main:app --reload
+The three services run independently against a local Postgres + Redis. On Windows use Git Bash (or WSL) for the shell snippets below.
 
-# Website / Admin
-cd website && pnpm install && pnpm dev
-cd admin   && pnpm install && pnpm dev
+### 0. Prerequisites
+- Python 3.11+, Node 18+, pnpm
+- PostgreSQL 16+ (local install or `docker compose up -d postgres redis`)
+- Redis 7+ (Windows: tporadowski fork via Scoop / Memurai; Linux/macOS: native)
+- `cp .env.example .env` and edit `JWT_SECRET`, DB credentials, `ENCRYPTION_KEY` (generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+
+### 1. Start dependencies only (skip if you already have local PG/Redis)
+```bash
+docker compose up -d postgres redis
+```
+
+### 2. API (FastAPI, port 8000)
+```bash
+cd api
+pip install -e .
+
+# DB migrations (first run + after any model change)
+alembic upgrade head
+
+# Seed admin + free plan + demo channel/model/route; idempotent.
+# Also backfills the free trial subscription for users that lack one.
+python -m app.scripts.seed
+
+# Run with reload
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Swagger: http://localhost:8000/docs · Health: http://localhost:8000/healthz
+
+Create a new Alembic migration after editing `app/models/`:
+```bash
+cd api
+alembic revision --autogenerate -m "describe change"
+alembic upgrade head
+```
+
+Run backend tests:
+```bash
+cd api && pytest -q
+```
+
+### 3. Website (Next.js, port 3000)
+```bash
+cd website
+pnpm install
+pnpm dev          # http://localhost:3000
+# pnpm build && pnpm start   # production preview
+```
+
+### 4. Admin console (Next.js, port 3001)
+```bash
+cd admin
+pnpm install
+pnpm dev          # http://localhost:3001
+# Sign in with SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD from .env
+```
+
+### Debug helpers
+```bash
+# Tail API logs (when launched via uvicorn --reload, logs go to stdout)
+
+# Quick relay smoke test
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer sk-xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
+
+# Inspect DB (adjust user/db if not using defaults)
+PGPASSWORD=llmxy_pass psql -U llmxy -d llmxy -h localhost \
+  -c "SELECT id, user_id, type, amount_cents, note FROM balance_tx ORDER BY id DESC LIMIT 10;"
+
+# Reset dev DB completely
+cd api && alembic downgrade base && alembic upgrade head && python -m app.scripts.seed
+
+# Mock a successful payment (dev only)
+curl "http://localhost:8000/payments/alipay/mock-pay?order_id=<ID>"
 ```
 
 ## Architecture
