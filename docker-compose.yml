@@ -43,6 +43,12 @@ services:
       REDIS_HOST: redis
     ports:
       - "${API_PORT:-8000}:8000"
+      # range of envoy listener ports the api can spawn (admin chooses
+      # specific ports per instance, must fall within this range)
+      - "9000-9099:9000-9099"
+    volumes:
+      - envoy_cfg:/var/llmxy/envoy
+      - envoy_logs:/var/llmxy/envoy-logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,3 +92,5 @@ services:
 
 volumes:
   pgdata:
+  envoy_cfg:
+  envoy_logs:

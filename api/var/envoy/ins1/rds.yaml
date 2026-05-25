@@ -1,0 +1,27 @@
+resources:
+- '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
+  name: llmxy_routes
+  virtual_hosts:
+  - name: llmxy
+    domains:
+    - '*'
+    routes:
+    - match:
+        prefix: /v1/
+        headers:
+        - name: x-llmxy-cluster
+          string_match:
+            exact: translator
+      route:
+        cluster: translator
+        prefix_rewrite: /internal/translate/v1/
+        auto_host_rewrite: true
+        timeout: 0s
+        idle_timeout: 300s
+    - match:
+        prefix: /v1/
+      route:
+        cluster_header: x-llmxy-cluster
+        auto_host_rewrite: true
+        timeout: 0s
+        idle_timeout: 300s

@@ -20,6 +20,10 @@ dependencies = [
   "email-validator>=2.1",
   "tenacity>=8.2",
   "cryptography>=42",
+  "pyyaml>=6.0",
+  "grpcio>=1.62",
+  "grpcio-tools>=1.62",
+  "protobuf>=4.25",
 ]
 
 [project.optional-dependencies]

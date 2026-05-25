@@ -8,6 +8,7 @@ from app.core.deps import require_admin
 from app.db.session import get_db
 from app.models import Model, User
 from app.schemas import ModelIn, ModelOut
+from app.services.envoy.config import regenerate_all_running
 
 router = APIRouter(prefix="/models", tags=["admin-models"])
 
@@ -23,6 +24,7 @@ async def create_model(req: ModelIn, _: User = Depends(require_admin), db: Async
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await regenerate_all_running(db)
     return row
 
 
@@ -35,6 +37,7 @@ async def update_model(mid: int, req: ModelIn, _: User = Depends(require_admin),
         setattr(row, k, v)
     await db.commit()
     await db.refresh(row)
+    await regenerate_all_running(db)
     return row
 
 
@@ -45,4 +48,5 @@ async def delete_model(mid: int, _: User = Depends(require_admin), db: AsyncSess
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     await db.delete(row)
     await db.commit()
+    await regenerate_all_running(db)
     return {"ok": True}

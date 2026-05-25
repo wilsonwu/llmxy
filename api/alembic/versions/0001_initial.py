@@ -123,7 +123,7 @@ def upgrade() -> None:
         "usage_logs",
         sa.Column("id", sa.BigInteger, primary_key=True),
         sa.Column("user_id", sa.BigInteger, sa.ForeignKey("users.id", ondelete="CASCADE"), index=True),
-        sa.Column("api_key_id", sa.BigInteger, sa.ForeignKey("api_keys.id")),
+        sa.Column("api_key_id", sa.BigInteger, sa.ForeignKey("api_keys.id", ondelete="SET NULL")),
         sa.Column("model_id", sa.Integer, sa.ForeignKey("models.id")),
         sa.Column("user_facing_model", sa.String(128)),
         sa.Column("upstream_model", sa.String(128)),
@@ -148,11 +148,47 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
+    # envoy_instances: status stored as plain VARCHAR (not PG ENUM) because
+    # asyncpg's ENUM creation interacts badly with repeated migration attempts
+    # and the Python-side enum (str-based) round-trips cleanly through text.
+    op.create_table(
+        "envoy_instances",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("name", sa.String(64), nullable=False, unique=True),
+        sa.Column("listen_port", sa.Integer(), nullable=False, unique=True),
+        sa.Column("admin_port", sa.Integer(), nullable=False, unique=True),
+        sa.Column("status", sa.String(16), nullable=False, server_default="stopped"),
+        sa.Column("pid", sa.Integer(), nullable=True),
+        sa.Column("config_version", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("config_dir", sa.String(512), nullable=False),
+        sa.Column("log_dir", sa.String(512), nullable=False),
+        sa.Column("last_health_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+    op.create_index("ix_envoy_instances_name", "envoy_instances", ["name"], unique=True)
+
+    # hot-path indexes
+    op.create_index(
+        "ix_usage_logs_user_created",
+        "usage_logs",
+        ["user_id", "created_at"],
+        postgresql_using="btree",
+    )
+    op.create_index("ix_usage_logs_created", "usage_logs", ["created_at"])
+    op.create_index("ix_balance_tx_user_created", "balance_tx", ["user_id", "created_at"])
+
 
 def downgrade() -> None:
+    op.drop_index("ix_balance_tx_user_created", table_name="balance_tx")
+    op.drop_index("ix_usage_logs_created", table_name="usage_logs")
+    op.drop_index("ix_usage_logs_user_created", table_name="usage_logs")
+    op.drop_index("ix_envoy_instances_name", table_name="envoy_instances")
     for t in [
-        "balance_tx", "usage_logs", "route_policies", "models", "channels",
-        "orders", "subscriptions", "plans", "api_keys", "users",
+        "envoy_instances", "balance_tx", "usage_logs", "route_policies",
+        "models", "channels", "orders", "subscriptions", "plans",
+        "api_keys", "users",
     ]:
         op.drop_table(t)
     for e in ["balancetxtype", "routestrategy", "orderstatus", "paymentchannel", "keystatus", "userstatus", "userrole"]:

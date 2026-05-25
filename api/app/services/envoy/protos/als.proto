@@ -1,0 +1,87 @@
+// Minimal subset of envoy access log protos — only the fields llmxy needs.
+// Field numbers MUST match upstream envoy (forward/backward compatible by field
+// number) — sourced from envoy/data/accesslog/v3 + envoy/service/accesslog/v3
+// in github.com/envoyproxy/envoy. Anything we don't read is omitted; unknown
+// fields are silently skipped by protobuf.
+syntax = "proto3";
+
+package llmxy.als;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/duration.proto";
+
+// ---- envoy.service.accesslog.v3.StreamAccessLogsMessage --------------------
+
+message StreamAccessLogsMessage {
+  message Identifier {
+    Node node = 1;
+    string log_name = 2;
+  }
+  message HTTPAccessLogEntries {
+    repeated HTTPAccessLogEntry log_entry = 1;
+  }
+  message TCPAccessLogEntries {}  // ignored
+
+  Identifier identifier = 1;
+  oneof log_entries {
+    HTTPAccessLogEntries http_logs = 2;
+    TCPAccessLogEntries tcp_logs = 3;
+  }
+}
+
+message StreamAccessLogsResponse {}
+
+message Node {
+  string id = 1;
+  string cluster = 2;
+}
+
+// ---- envoy.data.accesslog.v3.HTTPAccessLogEntry ----------------------------
+
+message HTTPAccessLogEntry {
+  AccessLogCommon common_properties = 1;
+  HTTPRequestProperties request = 2;
+  HTTPResponseProperties response = 3;
+}
+
+// Only the handful of fields we care about. Unknown fields are dropped.
+message AccessLogCommon {
+  google.protobuf.Duration duration = 23;
+  Metadata metadata = 17;
+  string upstream_cluster = 15;
+}
+
+// envoy.config.core.v3.Metadata
+message Metadata {
+  // map<string, google.protobuf.Struct> filter_metadata
+  map<string, google.protobuf.Struct> filter_metadata = 1;
+}
+
+message HTTPRequestProperties {
+  string path = 8;
+  // request_headers_bytes etc skipped; we read them via
+  // `additional_request_headers_to_log` which puts them at field 31.
+  map<string, string> request_headers = 31;
+}
+
+message HTTPResponseProperties {
+  // envoy uses google.protobuf.UInt32Value here; for parsing we can use a
+  // raw uint32 message — but protobuf doesn't auto-unwrap. Use a wrapper.
+  UInt32Value response_code = 1;
+  map<string, string> response_headers = 5;
+}
+
+message UInt32Value {
+  uint32 value = 1;
+}
+
+// ---- service ---------------------------------------------------------------
+// Must match envoy.service.accesslog.v3.AccessLogService so envoy can call us.
+// gRPC method dispatch is by string path
+// ("/envoy.service.accesslog.v3.AccessLogService/StreamAccessLogs"), not by
+// proto package, so we declare the service under that fully-qualified name
+// by using a wrapper at runtime (see als_server.py register_path).
+
+service AccessLogService {
+  rpc StreamAccessLogs(stream StreamAccessLogsMessage) returns (StreamAccessLogsResponse);
+}

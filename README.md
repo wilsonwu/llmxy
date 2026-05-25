@@ -13,6 +13,7 @@ AI Token gateway / dispatcher. Three sub-projects in the same repo:
 | website | Sign up / sign in, plan subscriptions, top up, API key management, usage & billing |
 | admin | User & order management, upstream channel config, models & rates, plan config, smart routing policies & weights, stats |
 | api | OpenAI-compatible `/v1/chat/completions` `/v1/embeddings` `/v1/models`; auth, billing, rate limiting; direct connections to OpenAI / Anthropic / Gemini |
+| envoy front-proxy | Optional: per-instance Envoy spawned & managed from admin. Handles the `/v1/*` hot path in C++ (ext_authz callback to api, gRPC ALS for usage→billing). Anthropic/Gemini/Azure are routed back to an internal `translator` endpoint so the Lua usage filter sees uniform OpenAI-shape responses. |
 
 ## Quick start
 
@@ -24,6 +25,36 @@ docker compose up -d --build
 - API:     http://localhost:8000  (Swagger: /docs, health: /healthz)
 - Website: http://localhost:3000
 - Admin:   http://localhost:3001  (default admin in .env: SEED_ADMIN_EMAIL / PASSWORD)
+- Envoy front-proxy ports: `9000-9099` (per-instance, configured in admin UI)
+
+### Envoy front-proxy
+
+llmxy ships with **two relay transports** that run side-by-side:
+
+- **api-direct** (`http://localhost:8000/v1/*`) — always available, served by FastAPI. Lower throughput but zero extra setup. This is the default for development and small deployments.
+- **envoy** (`http://localhost:9000+/v1/*`) — optional high-performance path. Each envoy instance is spawned/managed from the admin console; clients opt in by pointing at the envoy listen port. Internally envoy callbacks the api for ext_authz (auth/quota) and reports usage back via gRPC ALS for async billing.
+
+The admin → *Envoy instances* page shows which transport is currently active and which ports are listening. Clients are never silently redirected — they choose by URL.
+
+Open `Envoy instances` in the admin console → New instance → pick a listen
+port in the 9000-9099 range → Start. Once running, point clients at the
+envoy listen port:
+
+```bash
+curl http://localhost:9000/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"stream":true}'
+```
+
+Direct OpenAI-compatible channels are proxied by Envoy in-process; anything
+else (Anthropic / Gemini / Azure) is forwarded to an internal translator
+endpoint that re-emits an OpenAI-shape SSE stream. Usage is extracted by
+an inline Lua filter and reported via gRPC ALS, where `charge_user` and a
+`UsageLog` row are written asynchronously — clients are not blocked on
+billing I/O on the hot path.
+
+Channel/model/route changes immediately rewrite all running instances' YAML
+config (file-based hot-reload — no restart needed).
 
 ## Local development
 

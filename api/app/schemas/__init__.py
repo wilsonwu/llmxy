@@ -237,3 +237,29 @@ class UserDetailOut(BaseModel):
     spent_30d_cents: int
     requests_total: int
     requests_30d: int
+
+
+# -------- Envoy instances --------
+class EnvoyInstanceIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    listen_port: int = Field(ge=1024, le=65535)
+    admin_port: int = Field(ge=1024, le=65535)
+
+
+class EnvoyInstanceOut(BaseModel):
+    id: int
+    name: str
+    listen_port: int
+    admin_port: int
+    status: str
+    pid: Optional[int] = None
+    config_version: int
+    config_dir: str
+    log_dir: str
+    last_health_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

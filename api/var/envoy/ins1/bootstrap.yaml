@@ -1,0 +1,21 @@
+node:
+  id: llmxy-ins1
+  cluster: llmxy
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9001
+dynamic_resources:
+  cds_config:
+    path_config_source:
+      path: D:\WilsonWuData\mycode\llmxy\api\var\envoy\ins1\cds.yaml
+      watched_directory:
+        path: D:\WilsonWuData\mycode\llmxy\api\var\envoy\ins1
+    resource_api_version: V3
+  lds_config:
+    path_config_source:
+      path: D:\WilsonWuData\mycode\llmxy\api\var\envoy\ins1\lds.yaml
+      watched_directory:
+        path: D:\WilsonWuData\mycode\llmxy\api\var\envoy\ins1
+    resource_api_version: V3

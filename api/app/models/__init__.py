@@ -63,6 +63,13 @@ class BalanceTxType(str, enum.Enum):
     grant = "grant"
 
 
+class EnvoyStatus(str, enum.Enum):
+    stopped = "stopped"
+    starting = "starting"
+    running = "running"
+    error = "error"
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -179,7 +186,7 @@ class UsageLog(Base):
     __tablename__ = "usage_logs"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    api_key_id: Mapped[Optional[int]] = mapped_column(ForeignKey("api_keys.id"))
+    api_key_id: Mapped[Optional[int]] = mapped_column(ForeignKey("api_keys.id", ondelete="SET NULL"))
     model_id: Mapped[Optional[int]] = mapped_column(ForeignKey("models.id"))
     user_facing_model: Mapped[Optional[str]] = mapped_column(String(128))
     upstream_model: Mapped[Optional[str]] = mapped_column(String(128))
@@ -202,3 +209,21 @@ class BalanceTx(Base):
     ref_id: Mapped[Optional[str]] = mapped_column(String(64))
     note: Mapped[Optional[str]] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EnvoyInstance(Base):
+    """A single envoy process managed by the api. One row per envoy daemon."""
+    __tablename__ = "envoy_instances"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    listen_port: Mapped[int] = mapped_column(Integer, unique=True)
+    admin_port: Mapped[int] = mapped_column(Integer, unique=True)
+    status: Mapped[EnvoyStatus] = mapped_column(SAEnum(EnvoyStatus, native_enum=False, length=16), default=EnvoyStatus.stopped, nullable=False)
+    pid: Mapped[Optional[int]] = mapped_column(Integer)
+    config_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    config_dir: Mapped[str] = mapped_column(String(512))
+    log_dir: Mapped[str] = mapped_column(String(512))
+    last_health_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

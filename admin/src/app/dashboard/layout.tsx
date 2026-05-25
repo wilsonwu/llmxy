@@ -11,6 +11,7 @@ const items = [
   { href: "/dashboard/models", label: "Models / Rates" },
   { href: "/dashboard/plans", label: "Plans" },
   { href: "/dashboard/routes", label: "Smart routing" },
+  { href: "/dashboard/envoy", label: "Envoy instances" },
 ];
 
 type Me = { email: string; role: string };

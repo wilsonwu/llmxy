@@ -8,6 +8,7 @@ from app.core.deps import require_admin
 from app.db.session import get_db
 from app.models import RoutePolicy, RouteStrategy, User
 from app.schemas import RoutePolicyIn, RoutePolicyOut
+from app.services.envoy.config import regenerate_all_running
 
 router = APIRouter(prefix="/routes", tags=["admin-routes"])
 
@@ -32,6 +33,7 @@ async def create_route(req: RoutePolicyIn, _: User = Depends(require_admin), db:
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await regenerate_all_running(db)
     return row
 
 
@@ -44,6 +46,7 @@ async def update_route(rid: int, req: RoutePolicyIn, _: User = Depends(require_a
         setattr(row, k, v)
     await db.commit()
     await db.refresh(row)
+    await regenerate_all_running(db)
     return row
 
 
@@ -54,4 +57,5 @@ async def delete_route(rid: int, _: User = Depends(require_admin), db: AsyncSess
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     await db.delete(row)
     await db.commit()
+    await regenerate_all_running(db)
     return {"ok": True}

@@ -9,6 +9,7 @@ from app.core.deps import require_admin
 from app.db.session import get_db
 from app.models import Channel, User
 from app.schemas import ChannelIn, ChannelOut
+from app.services.envoy.config import regenerate_all_running
 
 router = APIRouter(prefix="/channels", tags=["admin-channels"])
 
@@ -41,6 +42,7 @@ async def create_channel(req: ChannelIn, _: User = Depends(require_admin), db: A
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await regenerate_all_running(db)
     return _to_out(row)
 
 
@@ -60,6 +62,7 @@ async def update_channel(cid: int, req: ChannelIn, _: User = Depends(require_adm
         setattr(row, k, v)
     await db.commit()
     await db.refresh(row)
+    await regenerate_all_running(db)
     return _to_out(row)
 
 
@@ -70,4 +73,5 @@ async def delete_channel(cid: int, _: User = Depends(require_admin), db: AsyncSe
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     await db.delete(row)
     await db.commit()
+    await regenerate_all_running(db)
     return {"ok": True}

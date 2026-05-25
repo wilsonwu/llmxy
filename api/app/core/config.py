@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     # Default per-user requests-per-minute when plan provides none
     DEFAULT_RATE_LIMIT_RPM: int = 600
 
+    # ===== Envoy front-proxy =====
+    # Path to envoy binary
+    ENVOY_BIN: str = "envoy"
+    # Root dir for per-instance rendered configs: {ENVOY_CONFIG_ROOT}/{instance_name}/
+    ENVOY_CONFIG_ROOT: str = "./var/envoy"
+    ENVOY_LOG_ROOT: str = "./var/envoy-logs"
+    # Internal API base envoy ext_authz / translator calls; must be reachable from envoy
+    INTERNAL_API_HOST: str = "127.0.0.1"
+    INTERNAL_API_PORT: int = 8001
+    # gRPC ALS server (envoy AccessLogService client)
+    ALS_GRPC_PORT: int = 8002
+
     # Payments
     ALIPAY_APP_ID: str = ""
     ALIPAY_PRIVATE_KEY: str = ""
