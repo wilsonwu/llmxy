@@ -102,7 +102,7 @@ export default function EnvoyPage() {
   const [editing, setEditing] = useState<{ id: number; mode: Mode; name: string; listen_port: number; admin_port: number; admin_url: string } | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
-  const [openMenu, setOpenMenu] = useState<number | null>(null);
+  const [openMenu, setOpenMenu] = useState<{ id: number; top: number; right: number } | null>(null);
   const [drawer, setDrawer] = useState<{ inst: Inst; tab: "stats" | "logs" | "conn" | "bootstrap" } | null>(null);
   const [drawerData, setDrawerData] = useState<any>(null);
 
@@ -270,12 +270,21 @@ export default function EnvoyPage() {
                   <span className="relative inline-block">
                     <button
                       className="btn-outline px-2"
-                      onClick={() => setOpenMenu(openMenu === i.id ? null : i.id)}
+                      onClick={(e) => {
+                        if (openMenu?.id === i.id) { setOpenMenu(null); return; }
+                        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        // Position via fixed coords so the table's overflow-x-auto
+                        // can't clip the menu.
+                        setOpenMenu({ id: i.id, top: r.bottom + 4, right: window.innerWidth - r.right });
+                      }}
                     >⋯</button>
-                    {openMenu === i.id && (
+                    {openMenu?.id === i.id && (
                       <>
-                        <div className="fixed inset-0 z-10" onClick={() => setOpenMenu(null)} />
-                        <div className="absolute right-0 z-20 mt-1 min-w-[140px] rounded border bg-white py-1 shadow-lg">
+                        <div className="fixed inset-0 z-40" onClick={() => setOpenMenu(null)} />
+                        <div
+                          className="fixed z-50 min-w-[140px] rounded border bg-white py-1 shadow-lg"
+                          style={{ top: openMenu.top, right: openMenu.right }}
+                        >
                           {i.mode === "local" && i.status === "running" && (
                             <>
                               <MenuItem onClick={() => { act(i.id, "reload"); setOpenMenu(null); }}>Reload</MenuItem>

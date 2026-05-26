@@ -71,6 +71,7 @@ class PlanIn(BaseModel):
     duration_days: int = 30
     models_jsonb: Optional[dict] = None
     rate_limit_jsonb: Optional[dict] = None
+    max_purchases_per_user: Optional[int] = Field(default=None, ge=1)
     active: bool = True
 
 
@@ -258,6 +259,15 @@ class SubscriptionOut(BaseModel):
     canceled_at: Optional[datetime] = None
     last_renewal_at: Optional[datetime] = None
     last_renewal_error: Optional[str] = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def depleted(self) -> bool:
+        """True when an otherwise-active sub has zero quota left in the current
+        period. Surfaces uniformly for one_time (no auto-refill, gone for good)
+        and recurring (refills next renewal, but the current cycle is dry).
+        Used by UI to distinguish "active and usable" from "active but spent."""
+        return self.status == "active" and (self.remaining_cents or 0) <= 0
 
     class Config:
         from_attributes = True

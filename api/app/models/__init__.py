@@ -130,6 +130,9 @@ class Plan(Base):
     duration_days: Mapped[int] = mapped_column(Integer, default=30)
     models_jsonb: Mapped[Optional[dict]] = mapped_column(JSON)
     rate_limit_jsonb: Mapped[Optional[dict]] = mapped_column(JSON)
+    # one_time only. NULL = unlimited; positive int = lifetime purchase cap per user.
+    # Ignored for recurring (one-active-sub rule still applies).
+    max_purchases_per_user: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

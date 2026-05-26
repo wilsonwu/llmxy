@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -30,10 +29,14 @@ async def seed() -> None:
         # demo plan
         plan = (await db.execute(select(Plan).where(Plan.code == "free"))).scalar_one_or_none()
         if not plan:
-            db.add(Plan(code="free", name="Free trial", plan_type="one_time", price_cents=0, quota_cents=1_00, duration_days=30))
-        elif plan.plan_type != "one_time":
-            # Coerce legacy seeded rows (default was recurring) to one-time.
-            plan.plan_type = "one_time"
+            db.add(Plan(code="free", name="Free trial", plan_type="one_time", price_cents=0, quota_cents=1_00, duration_days=30, max_purchases_per_user=1))
+        else:
+            if plan.plan_type != "one_time":
+                # Coerce legacy seeded rows (default was recurring) to one-time.
+                plan.plan_type = "one_time"
+            if plan.max_purchases_per_user is None:
+                # Backfill: prevent free-trial re-purchase abuse once a row pre-dates this column.
+                plan.max_purchases_per_user = 1
 
         # demo channel
         ch = (await db.execute(select(Channel).where(Channel.name == "default-openai"))).scalar_one_or_none()
@@ -77,24 +80,25 @@ async def seed() -> None:
 
         await db.commit()
 
-        # Backfill: grant free trial to any user that has no active subscription.
+        # Backfill: one-shot grant of free trial for users who have NEVER had
+        # one. Skips users whose historical purchase count already meets the
+        # plan's per-user cap — otherwise startup would silently re-grant the
+        # free plan after each expiry, defeating max_purchases_per_user.
         free = (await db.execute(select(Plan).where(Plan.code == "free", Plan.active.is_(True)))).scalar_one_or_none()
         if free and (free.quota_cents or 0) > 0:
-            now = datetime.now(timezone.utc)
+            limit = free.max_purchases_per_user  # None = unlimited
             users = (await db.execute(select(User))).scalars().all()
             for u in users:
-                has_active = (
-                    await db.execute(
-                        select(Subscription.id).where(
+                if limit is not None:
+                    count = (await db.execute(
+                        select(func.count(Subscription.id)).where(
                             Subscription.user_id == u.id,
-                            Subscription.status == "active",
-                            Subscription.current_period_end > now,
-                            Subscription.remaining_cents > 0,
+                            Subscription.plan_id == free.id,
                         )
-                    )
-                ).first()
-                if not has_active:
-                    await grant_subscription(db, u, free, ref_id="seed-backfill")
+                    )).scalar_one()
+                    if count >= limit:
+                        continue
+                await grant_subscription(db, u, free, ref_id="seed-backfill")
             await db.commit()
 
 

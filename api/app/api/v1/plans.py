@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
@@ -64,6 +64,29 @@ async def subscribe_with_balance(
                 "current_period_end": existing.current_period_end.isoformat(),
             },
         )
+
+    # one_time plans support a lifetime per-user purchase cap. NULL = unlimited.
+    # Count covers all historical rows (active/expired/canceled) so users can't
+    # wait for expiry and re-buy the freebie repeatedly.
+    if plan.plan_type == "one_time" and plan.max_purchases_per_user is not None:
+        used = (
+            await db.execute(
+                select(func.count(Subscription.id)).where(
+                    Subscription.user_id == user.id,
+                    Subscription.plan_id == plan.id,
+                )
+            )
+        ).scalar_one()
+        if used >= plan.max_purchases_per_user:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "purchase_limit_reached",
+                    "message": f"this plan is limited to {plan.max_purchases_per_user} purchase(s) per user",
+                    "used": used,
+                    "limit": plan.max_purchases_per_user,
+                },
+            )
 
     price = plan.price_cents or 0
     balance = user.balance_cents or 0

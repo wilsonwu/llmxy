@@ -17,6 +17,7 @@ type Sub = {
   canceled_at: string | null;
   last_renewal_at: string | null;
   last_renewal_error: string | null;
+  depleted: boolean;
 };
 
 const statusBadge: Record<Sub["status"], string> = {
@@ -25,6 +26,7 @@ const statusBadge: Record<Sub["status"], string> = {
   canceled: "bg-gray-100 text-gray-600",
   expired: "bg-gray-100 text-gray-500",
 };
+const depletedBadge = "bg-orange-100 text-orange-700";
 
 export default function Overview() {
   const { data: me } = useSWR<{ email: string; balance_cents: number; role: string }>("/api/v1/auth/me", fetcher);
@@ -92,7 +94,10 @@ export default function Overview() {
         </div>
         <div className="card">
           <p className="text-sm text-gray-500">Active subscriptions</p>
-          <p className="mt-2 text-3xl font-bold">{live.filter(s => s.status === "active").length}</p>
+          <p className="mt-2 text-3xl font-bold">{live.filter(s => s.status === "active" && !s.depleted).length}</p>
+          {live.some(s => s.depleted) && (
+            <p className="mt-1 text-xs text-orange-600">{live.filter(s => s.depleted).length} exhausted this cycle.</p>
+          )}
           {live.some(s => s.status === "past_due") && (
             <p className="mt-1 text-xs text-amber-600">{live.filter(s => s.status === "past_due").length} past due — top up to resume.</p>
           )}
@@ -122,7 +127,16 @@ export default function Overview() {
                   <tr key={s.id} className="border-t align-top">
                     <td className="py-2">{s.plan_name || s.plan_code || `#${s.plan_id}`}</td>
                     <td>
-                      <span className={`rounded px-2 py-0.5 text-xs ${statusBadge[s.status]}`}>{s.status}</span>
+                      {s.depleted ? (
+                        <span className={`rounded px-2 py-0.5 text-xs ${depletedBadge}`}>
+                          {s.plan_type === "one_time" ? "exhausted" : "quota exhausted"}
+                        </span>
+                      ) : (
+                        <span className={`rounded px-2 py-0.5 text-xs ${statusBadge[s.status]}`}>{s.status}</span>
+                      )}
+                      {s.depleted && s.plan_type !== "one_time" && (
+                        <p className="mt-1 text-xs text-gray-500">refills on renewal</p>
+                      )}
                       {s.cancel_at_period_end && (
                         <p className="mt-1 text-xs text-gray-500">cancels at period end</p>
                       )}

@@ -56,6 +56,7 @@ def upgrade() -> None:
         sa.Column("duration_days", sa.Integer, server_default="30"),
         sa.Column("models_jsonb", sa.JSON),
         sa.Column("rate_limit_jsonb", sa.JSON),
+        sa.Column("max_purchases_per_user", sa.Integer, nullable=True),
         sa.Column("active", sa.Boolean, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )

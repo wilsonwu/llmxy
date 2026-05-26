@@ -3,16 +3,19 @@ import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 
-type P = { id?: number; code: string; name: string; description?: string; plan_type: "recurring" | "one_time"; price_cents: number; quota_cents: number; duration_days: number; active: boolean };
-const empty: P = { code: "", name: "", description: "", plan_type: "recurring", price_cents: 0, quota_cents: 0, duration_days: 30, active: true };
+type P = { id?: number; code: string; name: string; description?: string; plan_type: "recurring" | "one_time"; price_cents: number; quota_cents: number; duration_days: number; max_purchases_per_user?: number | null; active: boolean };
+const empty: P = { code: "", name: "", description: "", plan_type: "recurring", price_cents: 0, quota_cents: 0, duration_days: 30, max_purchases_per_user: null, active: true };
 
 export default function PlansPage() {
   const { data, mutate } = useSWR<P[]>("/api/v1/admin/plans", fetcher);
   const [editing, setEditing] = useState<P | null>(null);
 
   async function save(p: P) {
-    if (p.id) await api(`/api/v1/admin/plans/${p.id}`, { method: "PUT", body: JSON.stringify(p) });
-    else await api(`/api/v1/admin/plans`, { method: "POST", body: JSON.stringify(p) });
+    // recurring plans ignore max_purchases_per_user; strip it so the server
+    // doesn't see stale UI state if the operator switched type mid-edit.
+    const payload = p.plan_type === "recurring" ? { ...p, max_purchases_per_user: null } : p;
+    if (p.id) await api(`/api/v1/admin/plans/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
+    else await api(`/api/v1/admin/plans`, { method: "POST", body: JSON.stringify(payload) });
     setEditing(null); mutate();
   }
   async function del(id: number) {
@@ -27,7 +30,7 @@ export default function PlansPage() {
       </div>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Type</th><th>Price</th><th>Quota</th><th>Duration</th><th>Active</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Type</th><th>Price</th><th>Quota</th><th>Duration</th><th>Limit</th><th>Active</th><th></th></tr></thead>
           <tbody>
             {data?.map((p) => (
               <tr key={p.id}>
@@ -36,6 +39,7 @@ export default function PlansPage() {
                 <td>${(p.price_cents/100).toFixed(2)}{p.plan_type === "recurring" && <span className="text-xs text-gray-500"> /mo</span>}</td>
                 <td>${(p.quota_cents/100).toFixed(2)}</td>
                 <td>{p.plan_type === "one_time" ? `${p.duration_days}d` : "—"}</td>
+                <td>{p.plan_type === "one_time" ? (p.max_purchases_per_user == null ? "∞" : `${p.max_purchases_per_user}×`) : "—"}</td>
                 <td>{p.active ? "✓" : "—"}</td>
                 <td className="space-x-2">
                   <button className="btn-outline" onClick={() => setEditing({ ...p })}>Edit</button>
@@ -71,6 +75,22 @@ export default function PlansPage() {
                   <input type="number" className="input w-full" value={editing.duration_days} onChange={(e) => setEditing({ ...editing, duration_days: +e.target.value })} /></div>
               )}
             </div>
+            {editing.plan_type === "one_time" && (
+              <div>
+                <label className="label">max purchases per user (blank = unlimited)</label>
+                <input
+                  type="number"
+                  min={1}
+                  className="input w-full"
+                  value={editing.max_purchases_per_user ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setEditing({ ...editing, max_purchases_per_user: v === "" ? null : Math.max(1, +v) });
+                  }}
+                />
+                <p className="text-xs text-gray-500 mt-1">Counts all historical purchases (active/expired/canceled). Use 1 for free trials.</p>
+              </div>
+            )}
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={editing.active} onChange={(e) => setEditing({ ...editing, active: e.target.checked })} /> Active
             </label>
