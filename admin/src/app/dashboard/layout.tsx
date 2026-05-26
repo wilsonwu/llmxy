@@ -12,6 +12,7 @@ const items = [
   { href: "/dashboard/plans", label: "Plans" },
   { href: "/dashboard/routes", label: "Smart routing" },
   { href: "/dashboard/envoy", label: "Envoy instances" },
+  { href: "/dashboard/usage", label: "Usage logs" },
 ];
 
 type Me = { email: string; role: string };

@@ -20,6 +20,7 @@ from app.api.v1.admin import models as admin_models
 from app.api.v1.admin import plans as admin_plans
 from app.api.v1.admin import routes as admin_routes
 from app.api.v1.admin import stats as admin_stats
+from app.api.v1.admin import usage as admin_usage
 from app.api.v1.admin import users as admin_users
 from app.core.config import settings
 from app.core.request_ctx import request_id_var
@@ -164,6 +165,7 @@ app.include_router(admin_models.router, prefix=ADMIN)
 app.include_router(admin_plans.router, prefix=ADMIN)
 app.include_router(admin_routes.router, prefix=ADMIN)
 app.include_router(admin_stats.router, prefix=ADMIN)
+app.include_router(admin_usage.router, prefix=ADMIN)
 app.include_router(admin_envoy.router, prefix=ADMIN)
 
 # OpenAI-compatible relay (root /v1/*)

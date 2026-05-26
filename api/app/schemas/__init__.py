@@ -174,6 +174,7 @@ class RoutePolicyOut(BaseModel):
 class UsageLogOut(BaseModel):
     id: int
     user_id: int
+    api_key_id: Optional[int] = None
     model_id: Optional[int]
     user_facing_model: Optional[str]
     upstream_model: Optional[str]
