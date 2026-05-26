@@ -34,6 +34,18 @@ class UserStatus(str, enum.Enum):
 class KeyStatus(str, enum.Enum):
     active = "active"
     disabled = "disabled"
+    expired = "expired"
+
+
+class QuotaMode(str, enum.Enum):
+    until_depleted = "until_depleted"
+    periodic = "periodic"
+
+
+class QuotaPeriod(str, enum.Enum):
+    day = "day"
+    week = "week"
+    month = "month"
 
 
 class OrderStatus(str, enum.Enum):
@@ -111,6 +123,13 @@ class ApiKey(Base):
     quota_cents: Mapped[int] = mapped_column(BigInteger, default=0)  # 0 = unlimited
     used_cents: Mapped[int] = mapped_column(BigInteger, default=0)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    quota_mode: Mapped[QuotaMode] = mapped_column(
+        SAEnum(QuotaMode), default=QuotaMode.until_depleted, nullable=False
+    )
+    # periodic-only: nullable for until_depleted mode.
+    quota_period: Mapped[Optional[QuotaPeriod]] = mapped_column(SAEnum(QuotaPeriod))
+    quota_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    quota_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship(back_populates="api_keys")

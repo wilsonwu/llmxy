@@ -93,8 +93,12 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         api_key = (
             await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
         ).scalar_one_or_none()
-        if not api_key or api_key.status != KeyStatus.active:
+        if not api_key:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key")
+        from app.services.api_key import enforce_key_state
+        await enforce_key_state(db, api_key)
+        if api_key.status != KeyStatus.active:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"api key {api_key.status.value}")
         user = await db.get(User, api_key.user_id)
         if not user or user.status != UserStatus.active:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user disabled")

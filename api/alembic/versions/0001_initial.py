@@ -37,10 +37,19 @@ def upgrade() -> None:
         sa.Column("name", sa.String(128), nullable=False),
         sa.Column("key_hash", sa.String(128), nullable=False, unique=True, index=True),
         sa.Column("key_prefix", sa.String(32), nullable=False),
-        sa.Column("status", sa.Enum("active", "disabled", name="keystatus"), nullable=False, server_default="active"),
+        sa.Column("status", sa.Enum("active", "disabled", "expired", name="keystatus"), nullable=False, server_default="active"),
         sa.Column("quota_cents", sa.BigInteger, server_default="0"),
         sa.Column("used_cents", sa.BigInteger, server_default="0"),
         sa.Column("expires_at", sa.DateTime(timezone=True)),
+        sa.Column(
+            "quota_mode",
+            sa.Enum("until_depleted", "periodic", name="quotamode"),
+            nullable=False,
+            server_default="until_depleted",
+        ),
+        sa.Column("quota_period", sa.Enum("day", "week", "month", name="quotaperiod"), nullable=True),
+        sa.Column("quota_period_start", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("quota_period_end", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 

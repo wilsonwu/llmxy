@@ -235,6 +235,13 @@ async def startup() -> None:
     except Exception as e:
         logging.warning("renewal worker failed to start (continuing): %s", e)
 
+    # API key expiry sweeper (flips active→expired for past-due idle keys).
+    try:
+        from app.services import api_key_expiry
+        await api_key_expiry.start()
+    except Exception as e:
+        logging.warning("api_key expiry worker failed to start (continuing): %s", e)
+
     # Report transport state so operators see at a glance whether envoy
     # is taking traffic or whether the api-direct path is the only one up.
     try:
@@ -283,6 +290,11 @@ async def shutdown() -> None:
     try:
         from app.services import subscriptions_renewal
         await subscriptions_renewal.stop()
+    except Exception:
+        pass
+    try:
+        from app.services import api_key_expiry
+        await api_key_expiry.stop()
     except Exception:
         pass
 # touch 1779786107

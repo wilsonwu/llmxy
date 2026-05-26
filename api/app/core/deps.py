@@ -43,8 +43,14 @@ async def get_api_key(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key format")
     h = hash_api_key(plain)
     row = (await db.execute(select(ApiKey).where(ApiKey.key_hash == h))).scalar_one_or_none()
-    if not row or row.status != KeyStatus.active:
+    if not row:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key")
+    # Lazy state machine: expire stale keys + roll periodic windows before
+    # the active-status check below sees them.
+    from app.services.api_key import enforce_key_state
+    await enforce_key_state(db, row)
+    if row.status != KeyStatus.active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"api key {row.status.value}")
     user = await db.get(User, row.user_id)
     if not user or user.status != UserStatus.active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user disabled")

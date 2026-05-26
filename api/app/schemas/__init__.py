@@ -40,6 +40,17 @@ class ApiKeyCreate(BaseModel):
     name: str
     quota_cents: int = 0
     expires_at: Optional[datetime] = None
+    quota_mode: str = "until_depleted"  # until_depleted | periodic
+    quota_period: Optional[str] = None  # day | week | month, required iff periodic
+
+
+class ApiKeyUpdate(BaseModel):
+    name: Optional[str] = None
+    quota_cents: Optional[int] = Field(default=None, ge=0)
+    expires_at: Optional[datetime] = None
+    clear_expires_at: bool = False  # distinguish "leave alone" vs "clear to NULL"
+    quota_mode: Optional[str] = None
+    quota_period: Optional[str] = None
 
 
 class ApiKeyOut(BaseModel):
@@ -50,6 +61,10 @@ class ApiKeyOut(BaseModel):
     quota_cents: int
     used_cents: int
     expires_at: Optional[datetime] = None
+    quota_mode: str = "until_depleted"
+    quota_period: Optional[str] = None
+    quota_period_start: Optional[datetime] = None
+    quota_period_end: Optional[datetime] = None
     created_at: datetime
 
     class Config:
