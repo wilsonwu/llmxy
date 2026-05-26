@@ -305,19 +305,23 @@ def render_rds() -> dict[str, Any]:
 
 
 def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
+    if inst.mode == EnvoyMode.remote or not inst.config_dir:
+        rds_config_source = {"ads": {}, "resource_api_version": "V3"}
+    else:
+        rds_config_source = {
+            "path_config_source": {
+                "path": os.path.join(inst.config_dir, "rds.yaml"),
+                "watched_directory": {"path": inst.config_dir},
+            },
+            "resource_api_version": "V3",
+        }
     hcm = {
         "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
         "stat_prefix": "ingress_http",
         "codec_type": "AUTO",
         "rds": {
             "route_config_name": "llmxy_routes",
-            "config_source": {
-                "path_config_source": {
-                    "path": os.path.join(inst.config_dir, "rds.yaml"),
-                    "watched_directory": {"path": inst.config_dir},
-                },
-                "resource_api_version": "V3",
-            },
+            "config_source": rds_config_source,
         },
         "access_log": [{
             "name": "envoy.access_loggers.http_grpc",

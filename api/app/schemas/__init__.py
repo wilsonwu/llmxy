@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 
 
 # -------- Auth / Users --------
@@ -284,6 +284,15 @@ class EnvoyInstanceIn(BaseModel):
     admin_url: Optional[str] = Field(default=None, max_length=512)
 
 
+class EnvoyInstanceUpdate(BaseModel):
+    # mode + node_id are immutable. Everything else is optional; only fields
+    # the caller supplies are applied.
+    name: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    listen_port: Optional[int] = Field(default=None, ge=1024, le=65535)
+    admin_port: Optional[int] = Field(default=None, ge=1024, le=65535)
+    admin_url: Optional[str] = Field(default=None, max_length=512)
+
+
 class EnvoyInstanceOut(BaseModel):
     id: int
     name: str
@@ -304,6 +313,24 @@ class EnvoyInstanceOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def proxy_url(self) -> str:
+        """Where clients point /v1/* traffic. For local mode this is exact; for
+        remote it derives the host from admin_url and assumes the proxy listens
+        on listen_port on the same host (override admin_url's port). If admin_url
+        is not set or unparseable, falls back to listen_port-only display."""
+        if self.mode == "local":
+            return f"http://127.0.0.1:{self.listen_port}"
+        if self.admin_url:
+            from urllib.parse import urlparse
+            u = urlparse(self.admin_url)
+            host = u.hostname
+            scheme = u.scheme or "http"
+            if host:
+                return f"{scheme}://{host}:{self.listen_port}"
+        return f"http://<envoy-host>:{self.listen_port}"
+
     class Config:
         from_attributes = True
 
@@ -317,3 +344,14 @@ class EnvoyConnectionOut(BaseModel):
 
 class EnvoyBootstrapOut(BaseModel):
     yaml: str
+
+
+class EnvoyTestConnIn(BaseModel):
+    admin_url: str
+
+
+class EnvoyTestConnOut(BaseModel):
+    ok: bool
+    status_code: Optional[int] = None
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None

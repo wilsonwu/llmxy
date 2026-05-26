@@ -267,9 +267,12 @@ class EnvoyInstance(Base):
     # node_id reported by envoy in xDS/ALS — must match a row here for the
     # stream to be accepted.
     node_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
-    listen_port: Mapped[int] = mapped_column(Integer, unique=True)
+    # listen_port: for local, the local bind port (uniqueness enforced in API).
+    # For remote, the port envoy listens on at the remote host — many remote
+    # nodes can share the same port number, so no DB uniqueness.
+    listen_port: Mapped[int] = mapped_column(Integer)
     # admin_port: local mode binds envoy admin here. NULL for remote.
-    admin_port: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
+    admin_port: Mapped[Optional[int]] = mapped_column(Integer)
     # admin_url: how the control plane reaches envoy's admin API for stats /
     # readiness probes. Local: auto-derived `http://127.0.0.1:{admin_port}`.
     # Remote: supplied by the operator at create time.

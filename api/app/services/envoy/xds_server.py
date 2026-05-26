@@ -33,6 +33,15 @@ from envoy.service.discovery.v3 import (  # type: ignore
 from envoy.config.cluster.v3 import cluster_pb2  # type: ignore
 from envoy.config.listener.v3 import listener_pb2  # type: ignore
 from envoy.config.route.v3 import route_pb2  # type: ignore
+from envoy.extensions.transport_sockets.tls.v3 import tls_pb2  # noqa: F401 (register descriptor)
+from envoy.extensions.filters.network.http_connection_manager.v3 import (  # noqa: F401
+    http_connection_manager_pb2,
+)
+from envoy.extensions.filters.http.ext_authz.v3 import ext_authz_pb2  # noqa: F401
+from envoy.extensions.filters.http.lua.v3 import lua_pb2  # noqa: F401
+from envoy.extensions.filters.http.router.v3 import router_pb2  # noqa: F401
+from envoy.extensions.access_loggers.grpc.v3 import als_pb2  # noqa: F401
+from envoy.extensions.upstreams.http.v3 import http_protocol_options_pb2  # noqa: F401
 
 TYPE_URL_CLUSTER = "type.googleapis.com/envoy.config.cluster.v3.Cluster"
 TYPE_URL_LISTENER = "type.googleapis.com/envoy.config.listener.v3.Listener"
