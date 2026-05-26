@@ -3,9 +3,9 @@ import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 
-type M = { id?: number; code: string; display_name: string; channel_id: number; upstream_model: string; prompt_rate: number; completion_rate: number; enabled: boolean };
+type M = { id?: number; code: string; display_name: string; channel_id: number; upstream_model: string; kind: string; prompt_rate: number; completion_rate: number; enabled: boolean };
 type C = { id: number; name: string };
-const empty: M = { code: "", display_name: "", channel_id: 0, upstream_model: "", prompt_rate: 0, completion_rate: 0, enabled: true };
+const empty: M = { code: "", display_name: "", channel_id: 0, upstream_model: "", kind: "chat", prompt_rate: 0, completion_rate: 0, enabled: true };
 
 export default function ModelsPage() {
   const { data, mutate } = useSWR<M[]>("/api/v1/admin/models", fetcher);
@@ -39,12 +39,13 @@ export default function ModelsPage() {
       <p className="text-xs text-gray-500">rate unit: micro-cents (1/10000 cent) / 1K tokens. e.g. 1500 ≈ $0.00015/1K.</p>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>prompt_rate</th><th>completion_rate</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>Kind</th><th>prompt_rate</th><th>completion_rate</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
             {filtered.map((m) => (
               <tr key={m.id}>
                 <td>{m.id}</td><td>{m.code}</td><td>{m.display_name}</td>
                 <td>{chName(m.channel_id)}</td><td>{m.upstream_model}</td>
+                <td>{m.kind || "chat"}</td>
                 <td>{m.prompt_rate}</td><td>{m.completion_rate}</td>
                 <td>{m.enabled ? "✓" : "—"}</td>
                 <td className="space-x-2">
@@ -70,6 +71,13 @@ export default function ModelsPage() {
               </select></div>
             <div><label className="label">upstream_model</label>
               <input className="input w-full" value={editing.upstream_model} onChange={(e) => setEditing({ ...editing, upstream_model: e.target.value })} /></div>
+            <div><label className="label">kind</label>
+              <select className="input w-full" value={editing.kind} onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>
+                <option value="chat">chat (default — chat/completions)</option>
+                <option value="embedding">embedding (for smart-route classifier)</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Embedding models are used by smart routing to classify prompts; they cannot be exposed as user-facing chat models.</p>
+            </div>
             <div className="flex gap-3">
               <div className="flex-1"><label className="label">prompt_rate</label>
                 <input type="number" className="input w-full" value={editing.prompt_rate} onChange={(e) => setEditing({ ...editing, prompt_rate: +e.target.value })} /></div>

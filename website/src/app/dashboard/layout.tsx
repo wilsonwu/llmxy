@@ -23,9 +23,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [router]);
 
   return (
-    <div className="flex gap-6">
+    <div className="mx-auto flex max-w-screen-2xl gap-6">
       <aside className="w-48 shrink-0">
-        <nav className="space-y-1">
+        <nav className="space-y-1 sticky top-6">
           {items.map((i) => (
             <Link
               key={i.href}
@@ -43,7 +43,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </button>
         </nav>
       </aside>
-      <div className="flex-1">{children}</div>
+      <div className="flex-1 min-w-0">{children}</div>
     </div>
   );
 }

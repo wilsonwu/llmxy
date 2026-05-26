@@ -37,7 +37,7 @@ async def _load_route(db: AsyncSession, user_facing_model: str) -> tuple[RoutePo
     return policy, models_by_id, channels_by_id
 
 
-async def _record_classifier_usage(
+async def _record_smart_usage(
     db: AsyncSession,
     user: User,
     api_key: ApiKey,
@@ -45,21 +45,22 @@ async def _record_classifier_usage(
     user_facing_model: str,
     request_id: str,
 ) -> None:
-    """If smart routing called a classifier model, charge for it and log a row.
-    Tied to the relay row by request_id; kind='classifier'.
+    """If smart routing called the embedding classifier, charge for it and log a row.
+    Tied to the relay row by request_id; kind='classifier'. Cache hits cost nothing
+    but still leave a zero-cost row for traceability.
     """
-    cu = getattr(decision, "classifier_usage", None)
-    if not cu:
+    eu = getattr(decision, "embedding_usage", None)
+    if not eu:
         return
-    cost = calc_cost_cents(cu.model, cu.prompt_tokens, cu.completion_tokens) if cu.status == "ok" else 0
+    cost = calc_cost_cents(eu.model, eu.prompt_tokens, 0) if eu.status == "ok" else 0
     if cost > 0:
         await charge_user(db, user, api_key, cost, ref_id=request_id, note=f"{user_facing_model} [classifier]")
     db.add(UsageLog(
-        user_id=user.id, api_key_id=api_key.id, model_id=cu.model.id,
-        user_facing_model=user_facing_model, upstream_model=cu.upstream_model,
-        prompt_tokens=cu.prompt_tokens, completion_tokens=cu.completion_tokens,
-        cost_cents=cost, latency_ms=cu.latency_ms,
-        status=cu.status, request_id=request_id,
+        user_id=user.id, api_key_id=api_key.id, model_id=eu.model.id,
+        user_facing_model=user_facing_model, upstream_model=eu.upstream_model,
+        prompt_tokens=eu.prompt_tokens, completion_tokens=0,
+        cost_cents=cost, latency_ms=eu.latency_ms,
+        status=eu.status, request_id=request_id,
         kind="classifier", resolved_label=getattr(decision, "chosen_label", None),
     ))
 
@@ -133,7 +134,7 @@ async def chat_completions(
                     status="ok", request_id=request_id,
                     kind="relay", resolved_label=resolved_label,
                 ))
-                await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
+                await _record_smart_usage(db, user, api_key, decision, user_facing_model, request_id)
                 db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
                 await db.commit()
                 return
@@ -161,7 +162,7 @@ async def chat_completions(
                 status="ok", request_id=request_id,
                 kind="relay", resolved_label=resolved_label,
             ))
-            await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
+            await _record_smart_usage(db, user, api_key, decision, user_facing_model, request_id)
             db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
             await db.commit()
             return JSONResponse(result.body)

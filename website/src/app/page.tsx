@@ -3,7 +3,7 @@ import HeroCta from "@/components/HeroCta";
 
 export default function Home() {
   return (
-    <div className="space-y-12 py-8">
+    <div className="mx-auto max-w-6xl space-y-12 py-8">
       <section className="text-center">
         <h1 className="text-5xl font-bold">One key, every LLM</h1>
         <p className="mt-4 text-lg text-gray-600">

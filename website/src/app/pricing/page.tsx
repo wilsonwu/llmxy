@@ -91,7 +91,7 @@ export default function PricingPage() {
   if (error) return <p className="text-red-600">Failed to load: {String(error)}</p>;
   if (!data) return <p>Loading...</p>;
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <h1 className="text-3xl font-bold">Plans</h1>
       {msg && <p className="text-sm text-gray-700">{msg}</p>}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">

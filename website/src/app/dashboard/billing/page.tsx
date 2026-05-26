@@ -18,7 +18,7 @@ export default function BillingPage() {
                 <td>{new Date(t.created_at).toLocaleString()}</td>
                 <td>{t.type}</td>
                 <td className={t.amount_cents >= 0 ? "text-green-600" : "text-red-600"}>
-                  {t.amount_cents >= 0 ? "+" : ""}${(t.amount_cents / 100).toFixed(2)}
+                  {t.amount_cents >= 0 ? "+" : "-"}${Math.abs(t.amount_cents / 100).toFixed(2)}
                 </td>
                 <td>${(t.balance_after / 100).toFixed(2)}</td>
                 <td>{t.note || "—"}</td>

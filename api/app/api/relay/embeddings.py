@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.relay.chat import _load_route, _record_classifier_usage
+from app.api.relay.chat import _load_route, _record_smart_usage
 from app.core.deps import get_api_key
 from app.db.session import get_db
 from app.models import ApiKey, UsageLog, User
@@ -60,7 +60,7 @@ async def embeddings(
         status="ok", request_id=request_id,
         kind="relay", resolved_label=getattr(decision, "chosen_label", None),
     ))
-    await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
+    await _record_smart_usage(db, user, api_key, decision, user_facing_model, request_id)
     db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
     await db.commit()
     return JSONResponse(body)

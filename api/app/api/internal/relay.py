@@ -155,31 +155,32 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         rid = request.headers.get("x-request-id") or f"req-{uuid.uuid4().hex[:16]}"
         cluster = _channel_cluster_name(c.id) if _is_direct(c) else "translator"
 
-        # Smart-mode classifier overhead is invisible to Envoy/ALS — record it
-        # here so it shows up in usage/billing tied to the same request_id.
-        cu = getattr(decision, "classifier_usage", None)
-        if cu is not None:
+        # Smart-mode embedding-classifier overhead is invisible to Envoy/ALS —
+        # record it here so it shows up in usage/billing tied to the same
+        # request_id. Cache hits have prompt_tokens=0 → no charge, but we
+        # still emit a status='cache' row for traceability.
+        eu = getattr(decision, "embedding_usage", None)
+        if eu is not None:
             try:
-                cls_cost = calc_cost_cents(cu.model, cu.prompt_tokens, cu.completion_tokens) if cu.status == "ok" else 0
-                if cls_cost > 0:
-                    # Load ORM rows for charge_user (it mutates them).
+                emb_cost = calc_cost_cents(eu.model, eu.prompt_tokens, 0) if eu.status == "ok" else 0
+                if emb_cost > 0:
                     from app.models import ApiKey, User
                     ak_row = await db.get(ApiKey, snap.id)
                     user_row = await db.get(User, snap.user_id)
                     if ak_row and user_row:
-                        await charge_user(db, user_row, ak_row, cls_cost, ref_id=rid, note=f"{model_name} [classifier]")
+                        await charge_user(db, user_row, ak_row, emb_cost, ref_id=rid, note=f"{model_name} [classifier]")
                         db.info.setdefault("_quota_invalidate_uids", set()).add(snap.user_id)
                 db.add(UsageLog(
-                    user_id=snap.user_id, api_key_id=snap.id, model_id=cu.model.id,
-                    user_facing_model=model_name, upstream_model=cu.upstream_model,
-                    prompt_tokens=cu.prompt_tokens, completion_tokens=cu.completion_tokens,
-                    cost_cents=cls_cost, latency_ms=cu.latency_ms,
-                    status=cu.status, request_id=rid,
+                    user_id=snap.user_id, api_key_id=snap.id, model_id=eu.model.id,
+                    user_facing_model=model_name, upstream_model=eu.upstream_model,
+                    prompt_tokens=eu.prompt_tokens, completion_tokens=0,
+                    cost_cents=emb_cost, latency_ms=eu.latency_ms,
+                    status=eu.status, request_id=rid,
                     kind="classifier", resolved_label=decision.chosen_label,
                 ))
                 await db.commit()
             except Exception as e:
-                log.warning("classifier usage log failed rid=%s: %s", rid, e)
+                log.warning("embedding usage log failed rid=%s: %s", rid, e)
 
         headers: dict[str, str] = {
             "x-llmxy-cluster": cluster,

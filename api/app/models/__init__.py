@@ -207,8 +207,11 @@ class Model(Base):
     display_name: Mapped[str] = mapped_column(String(128))
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
     upstream_model: Mapped[str] = mapped_column(String(128))  # real upstream model name
+    # "chat" (default) or "embedding". Smart-routing exemplar embeddings use kind=embedding.
+    kind: Mapped[str] = mapped_column(String(16), default="chat", nullable=False)
     # rate per 1K tokens, stored as 1/10000 cents for precision (i.e. micro-cents).
     # cost_cents = ceil((prompt*pr + completion*cr) / 10000 / 1000)
+    # For embedding models completion_rate is ignored.
     prompt_rate: Mapped[int] = mapped_column(BigInteger, default=0)
     completion_rate: Mapped[int] = mapped_column(BigInteger, default=0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -224,18 +227,23 @@ class RoutePolicy(Base):
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # targets: [{model_id:int, weight:int, fallback_order:int, label?:str}]
     # ---- smart-strategy config (ignored unless strategy=smart) ----
-    smart_classifier_model_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("models.id", ondelete="SET NULL"), nullable=True
-    )
     smart_rules_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # rules: ordered list; first hit wins. Forms:
     #   {"type":"tokens","threshold":500,"gt_label":"strong","lte_label":"cheap"}
     #   {"type":"keyword","pattern":"<python-regex>","label":"<label>"}
     #   {"type":"code_block","label":"<label>"}
     smart_default_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # smart_classifier_hint: free-text guidance appended to classifier system prompt
-    # ("prefer cheap unless task needs reasoning" etc.). Optional, classifier-mode only.
-    smart_classifier_hint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Embedding-based classifier: model used to embed prompts + exemplars.
+    smart_embedding_model_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+    )
+    # exemplars: [{"label":"strong","text":"…"}, ...] — 3-10 per label is plenty.
+    smart_exemplars_jsonb: Mapped[list] = mapped_column(JSON, default=list)
+    # Cosine similarity cutoff as integer percent (0-100). Below this, fall through
+    # to smart_default_label. 55 ≈ "moderately confident" for sentence-level embeddings.
+    smart_score_threshold: Mapped[int] = mapped_column(Integer, default=55, nullable=False)
+    # Bumped on every exemplar / embedding-model change → invalidates Redis cache.
+    smart_embedding_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     scope: Mapped[RouteScope] = mapped_column(SAEnum(RouteScope), default=RouteScope.public)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

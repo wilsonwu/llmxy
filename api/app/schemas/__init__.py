@@ -148,6 +148,7 @@ class ModelIn(BaseModel):
     display_name: str
     channel_id: int
     upstream_model: str
+    kind: str = "chat"  # "chat" | "embedding"
     prompt_rate: int = 0  # micro-cent / 1K tokens
     completion_rate: int = 0
     enabled: bool = True
@@ -181,14 +182,20 @@ class RouteRule(BaseModel):
     label: Optional[str] = None
 
 
+class RouteExemplar(BaseModel):
+    label: str
+    text: str
+
+
 class RoutePolicyIn(BaseModel):
     user_facing_model: str
     strategy: str = "weighted"  # weighted/smart/fallback
     targets_jsonb: list[RouteTarget] = []
-    smart_classifier_model_id: Optional[int] = None
     smart_rules_jsonb: list[RouteRule] = []
     smart_default_label: Optional[str] = None
-    smart_classifier_hint: Optional[str] = None
+    smart_embedding_model_id: Optional[int] = None
+    smart_exemplars_jsonb: list[RouteExemplar] = []
+    smart_score_threshold: int = 55  # cosine similarity percent, 0-100
     scope: str = "public"  # public | private
     enabled: bool = True
 
@@ -198,10 +205,12 @@ class RoutePolicyOut(BaseModel):
     user_facing_model: str
     strategy: str
     targets_jsonb: list[dict]
-    smart_classifier_model_id: Optional[int] = None
     smart_rules_jsonb: list[dict] = []
     smart_default_label: Optional[str] = None
-    smart_classifier_hint: Optional[str] = None
+    smart_embedding_model_id: Optional[int] = None
+    smart_exemplars_jsonb: list[dict] = []
+    smart_score_threshold: int = 55
+    smart_embedding_version: int = 0
     scope: str = "public"
     enabled: bool
 
@@ -232,6 +241,7 @@ class UsageLogOut(BaseModel):
 
 class BalanceTxOut(BaseModel):
     id: int
+    user_id: int
     type: str
     amount_cents: int
     balance_after: int

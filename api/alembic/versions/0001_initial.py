@@ -17,6 +17,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Drop any leftover enum types from a previously aborted run so this
+    # initial migration is re-runnable in dev without manual cleanup.
+    for e in [
+        "balancetxtype", "routescope", "routestrategy", "orderstatus",
+        "paymentchannel", "quotaperiod", "quotamode", "keystatus",
+        "userstatus", "userrole",
+    ]:
+        op.execute(f"DROP TYPE IF EXISTS {e}")
+
     op.create_table(
         "users",
         sa.Column("id", sa.BigInteger, primary_key=True),
@@ -117,6 +126,7 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(128)),
         sa.Column("channel_id", sa.Integer, sa.ForeignKey("channels.id")),
         sa.Column("upstream_model", sa.String(128)),
+        sa.Column("kind", sa.String(16), nullable=False, server_default="chat"),
         sa.Column("prompt_rate", sa.BigInteger, server_default="0"),
         sa.Column("completion_rate", sa.BigInteger, server_default="0"),
         sa.Column("enabled", sa.Boolean, server_default=sa.true()),
@@ -129,10 +139,12 @@ def upgrade() -> None:
         sa.Column("user_facing_model", sa.String(128), unique=True, index=True),
         sa.Column("strategy", sa.Enum("weighted", "smart", "fallback", name="routestrategy"), server_default="weighted"),
         sa.Column("targets_jsonb", sa.JSON),
-        sa.Column("smart_classifier_model_id", sa.Integer, sa.ForeignKey("models.id", ondelete="SET NULL"), nullable=True),
         sa.Column("smart_rules_jsonb", sa.JSON, server_default=sa.text("'[]'")),
         sa.Column("smart_default_label", sa.String(64), nullable=True),
-        sa.Column("smart_classifier_hint", sa.Text, nullable=True),
+        sa.Column("smart_embedding_model_id", sa.Integer, sa.ForeignKey("models.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("smart_exemplars_jsonb", sa.JSON, server_default=sa.text("'[]'")),
+        sa.Column("smart_score_threshold", sa.Integer, nullable=False, server_default="55"),
+        sa.Column("smart_embedding_version", sa.Integer, nullable=False, server_default="0"),
         sa.Column("scope", sa.Enum("public", "private", name="routescope"), server_default="public"),
         sa.Column("enabled", sa.Boolean, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
@@ -210,20 +222,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Use IF EXISTS so a partial / older schema can still be torn down cleanly.
-    for idx in [
-        "ix_balance_tx_user_created",
-        "ix_usage_logs_created",
-        "ix_usage_logs_user_created",
-        "ix_envoy_instances_node_id",
-        "ix_envoy_instances_name",
-    ]:
-        op.execute(f"DROP INDEX IF EXISTS {idx}")
-    for t in [
-        "envoy_instances", "balance_tx", "usage_logs", "route_policies",
-        "models", "channels", "orders", "subscriptions", "plans",
-        "api_keys", "users",
-    ]:
-        op.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
-    for e in ["balancetxtype", "routescope", "routestrategy", "orderstatus", "paymentchannel", "keystatus", "userstatus", "userrole"]:
-        op.execute(f"DROP TYPE IF EXISTS {e}")
+    # Initial migration — nuke and pave. Drops every table, enum, sequence,
+    # function, etc. in the public schema in one shot.
+    op.execute("DROP SCHEMA public CASCADE")
+    op.execute("CREATE SCHEMA public")

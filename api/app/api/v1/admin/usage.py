@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_admin
 from app.db.session import get_db
-from app.models import UsageLog, User
-from app.schemas import PaginatedResp, UsageLogOut
+from app.models import BalanceTx, UsageLog, User
+from app.schemas import BalanceTxOut, PaginatedResp, UsageLogOut
 
 router = APIRouter(prefix="/usage", tags=["admin-usage"])
 
@@ -59,6 +59,41 @@ async def admin_logs(
     rows = (await db.execute(base.offset((page - 1) * page_size).limit(page_size))).scalars().all()
     return PaginatedResp(
         items=[UsageLogOut.model_validate(r).model_dump() for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/balance-tx", response_model=PaginatedResp)
+async def admin_balance_tx(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    user_id: Optional[int] = None,
+    type: Optional[str] = None,
+    ref_id: Optional[str] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    base = select(BalanceTx)
+    if user_id is not None:
+        base = base.where(BalanceTx.user_id == user_id)
+    if type:
+        base = base.where(BalanceTx.type == type)
+    if ref_id:
+        base = base.where(BalanceTx.ref_id == ref_id)
+    if start is not None:
+        base = base.where(BalanceTx.created_at >= start)
+    if end is not None:
+        base = base.where(BalanceTx.created_at < end)
+    base = base.order_by(desc(BalanceTx.id))
+
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    rows = (await db.execute(base.offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    return PaginatedResp(
+        items=[BalanceTxOut.model_validate(r).model_dump() for r in rows],
         total=total,
         page=page,
         page_size=page_size,

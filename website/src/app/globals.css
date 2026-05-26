@@ -30,8 +30,16 @@ body {
   @apply w-full text-sm;
 }
 .table th {
-  @apply border-b bg-gray-50 px-3 py-2 text-left font-semibold;
+  @apply whitespace-nowrap border-b bg-gray-50 px-3 py-2 text-left align-middle font-semibold;
 }
 .table td {
-  @apply border-b px-3 py-2;
+  @apply border-b px-3 py-2 align-middle tabular-nums;
+}
+.table tbody tr:hover {
+  @apply bg-gray-50;
+}
+.table td .btn,
+.table td .btn-primary,
+.table td .btn-outline {
+  @apply px-3 py-1 text-sm;
 }

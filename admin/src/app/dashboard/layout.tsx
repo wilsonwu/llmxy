@@ -9,7 +9,7 @@ const sections: { title: string; items: { href: string; label: string }[] }[] = 
     title: "Monitor",
     items: [
       { href: "/dashboard", label: "Dashboard" },
-      { href: "/dashboard/usage", label: "Usage logs" },
+      { href: "/dashboard/usage", label: "Usage & billing" },
     ],
   },
   {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import random
@@ -8,26 +7,12 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Channel, Model, RoutePolicy, RouteStrategy
+from app.services.providers.smart_embedding import EmbeddingUsage, classify as embed_classify
 
 log = logging.getLogger(__name__)
-
-CLASSIFY_CACHE_TTL = 3600  # 1h
-CLASSIFY_PROMPT_LIMIT = 4096  # only hash first N chars for cache key + classifier input
-
-
-@dataclass
-class ClassifierUsage:
-    model: Model
-    channel: Channel
-    upstream_model: str
-    prompt_tokens: int
-    completion_tokens: int
-    latency_ms: int
-    status: str  # "ok" | "error"
 
 
 @dataclass
@@ -36,7 +21,7 @@ class RouteDecision:
     channel: Channel
     fallback_chain: list[tuple[Model, Channel]]
     chosen_label: Optional[str] = None
-    classifier_usage: Optional[ClassifierUsage] = None
+    embedding_usage: Optional[EmbeddingUsage] = None
 
 
 def _ordered_targets(
@@ -108,8 +93,6 @@ def _cjk_ratio(text: str) -> float:
     return cjk / total if total else 0.0
 
 
-# Built-in preset predicates: id -> (description, predicate(text) -> bool).
-# Keeps admin UI free of regex. Length thresholds use char-count/4 ≈ token count.
 PRESET_PREDICATES: dict[str, callable] = {
     "code_block": lambda t: bool(_CODE_FENCE_RE.search(t)),
     "long_prompt": lambda t: _approx_token_count(t) > 800,
@@ -165,147 +148,6 @@ def _apply_rules(rules: list[dict], prompt_text: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Classifier
-# ---------------------------------------------------------------------------
-def _cache_key(classifier_model_id: int, labels: list[str], prompt_text: str) -> str:
-    h = hashlib.sha256()
-    h.update(str(classifier_model_id).encode())
-    h.update(b"|")
-    h.update("\x1f".join(sorted(labels)).encode())
-    h.update(b"|")
-    h.update(prompt_text[:CLASSIFY_PROMPT_LIMIT].encode("utf-8", errors="ignore"))
-    return f"llmxy:smart:cls:{h.hexdigest()}"
-
-
-def _build_classifier_messages(labels: list[str], prompt_text: str, hint: Optional[str] = None) -> list[dict]:
-    label_list = ", ".join(labels)
-    system = (
-        "You are a routing classifier. Read the user request below and answer with "
-        f"EXACTLY one of these labels: {label_list}. "
-        "Reply with the label only — no punctuation, no explanation."
-    )
-    if hint:
-        system += f"\nRouting guidance: {hint.strip()}"
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": prompt_text[:CLASSIFY_PROMPT_LIMIT]},
-    ]
-
-
-async def _classify(
-    classifier_model: Model,
-    classifier_channel: Channel,
-    labels: list[str],
-    prompt_text: str,
-    hint: Optional[str] = None,
-) -> tuple[Optional[str], Optional[ClassifierUsage]]:
-    """Call the classifier model; return (matched_label_or_None, usage_or_None).
-
-    Usage is recorded for billing; None only when no call was attempted.
-    """
-    if not labels or not prompt_text.strip():
-        return None, None
-    import time as _time
-    started = _time.time()
-    try:
-        from app.services import providers as _p
-
-        adapter = _p.get_adapter(classifier_channel.provider_type)
-        if not adapter:
-            return None, None
-        body = {
-            "model": classifier_model.upstream_model,
-            "messages": _build_classifier_messages(labels, prompt_text, hint),
-            "max_completion_tokens": 16,
-        }
-        result = await adapter.chat(classifier_channel, classifier_model.upstream_model, body, stream=False)
-        latency_ms = int((_time.time() - started) * 1000)
-        pt = getattr(result, "prompt_tokens", 0) or 0
-        ct = getattr(result, "completion_tokens", 0) or 0
-        ok = result.status == 200 and bool(result.body)
-        if not ok:
-            msg = (
-                f"smart classifier upstream non-200 status={result.status} "
-                f"model={classifier_model.upstream_model} body={str(result.body)[:1000]}"
-            )
-            log.warning(msg)
-            try:
-                with open("/tmp/llmxy-classifier.log", "a") as _f:
-                    _f.write(f"[{_time.strftime('%H:%M:%S', _time.localtime())}] {msg}\n")
-            except Exception:
-                pass
-        usage = ClassifierUsage(
-            model=classifier_model,
-            channel=classifier_channel,
-            upstream_model=classifier_model.upstream_model,
-            prompt_tokens=pt,
-            completion_tokens=ct,
-            latency_ms=latency_ms,
-            status="ok" if ok else "error",
-        )
-        if not ok:
-            return None, usage
-        choices = (result.body or {}).get("choices") or []
-        if not choices:
-            return None, usage
-        content = (((choices[0] or {}).get("message") or {}).get("content") or "").strip()
-        cleaned = re.sub(r"[^A-Za-z0-9_\-]+", "", content)[:64].lower()
-        for lbl in labels:
-            if lbl.lower() == cleaned or lbl.lower() == content.lower():
-                return lbl, usage
-        for lbl in labels:
-            if lbl.lower() in content.lower():
-                return lbl, usage
-        return None, usage
-    except Exception as e:
-        log.warning("smart classifier call failed: %s", e)
-        try:
-            with open("/tmp/llmxy-classifier.log", "a") as _f:
-                _f.write(f"[{_time.strftime('%H:%M:%S', _time.localtime())}] exception: {e!r}\n")
-        except Exception:
-            pass
-        latency_ms = int((_time.time() - started) * 1000)
-        return None, ClassifierUsage(
-            model=classifier_model,
-            channel=classifier_channel,
-            upstream_model=classifier_model.upstream_model,
-            prompt_tokens=0,
-            completion_tokens=0,
-            latency_ms=latency_ms,
-            status="error",
-        )
-
-
-async def _classify_cached(
-    classifier_model: Model,
-    classifier_channel: Channel,
-    labels: list[str],
-    prompt_text: str,
-    hint: Optional[str] = None,
-) -> tuple[Optional[str], Optional[ClassifierUsage]]:
-    """Returns (label, usage). usage is None on cache hit (no call made)."""
-    key = _cache_key(classifier_model.id, labels, prompt_text)
-    try:
-        from app.core.redis import get_redis
-
-        r = get_redis()
-        cached = await r.get(key)
-        if cached:
-            return (cached if cached in labels else None), None
-    except Exception as e:
-        log.debug("smart classify cache read skipped: %s", e)
-        r = None
-
-    label, usage = await _classify(classifier_model, classifier_channel, labels, prompt_text, hint)
-    if label and r is not None:
-        try:
-            await r.set(key, label, ex=CLASSIFY_CACHE_TTL)
-        except Exception:
-            pass
-    return label, usage
-
-
-# ---------------------------------------------------------------------------
 # Smart strategy
 # ---------------------------------------------------------------------------
 async def _smart_pick(
@@ -313,23 +155,26 @@ async def _smart_pick(
     pairs: list[tuple[Model, Channel, dict]],
     prompt_text: str,
     db: Optional[AsyncSession],
-) -> tuple[list[tuple[Model, Channel]], Optional[str], Optional[ClassifierUsage]]:
-    """Return (ordered_chain, chosen_label, classifier_usage)."""
+) -> tuple[list[tuple[Model, Channel]], Optional[str], Optional[EmbeddingUsage]]:
+    """Return (ordered_chain, chosen_label, embedding_usage).
+
+    Pipeline: rules → embedding classifier → smart_default_label.
+    """
     labels = [str(t.get("label")) for _, _, t in pairs if t.get("label")]
     unique_labels = list(dict.fromkeys(labels))
 
     chosen_label: Optional[str] = None
-    classifier_usage: Optional[ClassifierUsage] = None
+    embedding_usage: Optional[EmbeddingUsage] = None
     if unique_labels and prompt_text:
         chosen_label = _apply_rules(policy.smart_rules_jsonb or [], prompt_text)
-        if not chosen_label and policy.smart_classifier_model_id and db is not None:
-            cm = await db.get(Model, int(policy.smart_classifier_model_id))
-            if cm and cm.enabled:
-                cc = await db.get(Channel, cm.channel_id)
-                if cc and cc.enabled:
-                    chosen_label, classifier_usage = await _classify_cached(
-                        cm, cc, unique_labels, prompt_text,
-                        getattr(policy, "smart_classifier_hint", None),
+        if not chosen_label and policy.smart_embedding_model_id and db is not None:
+            em = await db.get(Model, int(policy.smart_embedding_model_id))
+            if em and em.enabled and em.kind == "embedding":
+                ec = await db.get(Channel, em.channel_id)
+                if ec and ec.enabled:
+                    chosen_label, _score, embedding_usage = await embed_classify(
+                        policy, em, ec, prompt_text,
+                        allowed_labels=set(unique_labels),
                     )
     if not chosen_label:
         chosen_label = policy.smart_default_label
@@ -343,8 +188,8 @@ async def _smart_pick(
             else:
                 rest.append((m, c))
     if head is None:
-        return _weighted_order(pairs), chosen_label, classifier_usage
-    return [head] + rest, chosen_label, classifier_usage
+        return _weighted_order(pairs), chosen_label, embedding_usage
+    return [head] + rest, chosen_label, embedding_usage
 
 
 def _weighted_order(pairs: list[tuple[Model, Channel, dict]]) -> list[tuple[Model, Channel]]:
@@ -382,12 +227,12 @@ async def select_route(
         return None
 
     chosen_label: Optional[str] = None
-    classifier_usage: Optional[ClassifierUsage] = None
+    embedding_usage: Optional[EmbeddingUsage] = None
     if policy.strategy == RouteStrategy.fallback:
         pairs.sort(key=lambda x: int(x[2].get("fallback_order", 0)))
         chain = [(m, c) for m, c, _ in pairs]
     elif policy.strategy == RouteStrategy.smart:
-        chain, chosen_label, classifier_usage = await _smart_pick(policy, pairs, prompt_text or "", db)
+        chain, chosen_label, embedding_usage = await _smart_pick(policy, pairs, prompt_text or "", db)
     else:
         chain = _weighted_order(pairs)
 
@@ -398,7 +243,7 @@ async def select_route(
         channel=chain[0][1],
         fallback_chain=chain[1:],
         chosen_label=chosen_label,
-        classifier_usage=classifier_usage,
+        embedding_usage=embedding_usage,
     )
 
 

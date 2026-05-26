@@ -11,5 +11,11 @@ body { background: #f4f5f7; color: #111; }
 .input { @apply rounded border border-gray-300 px-2 py-1 text-sm focus:border-brand-600 focus:outline-none; }
 .label { @apply mb-1 block text-xs font-medium text-gray-600; }
 .table { @apply w-full text-sm; }
-.table th { @apply border-b bg-gray-100 px-3 py-2 text-left font-semibold; }
-.table td { @apply border-b px-3 py-2; }
+.table th { @apply border-b bg-gray-100 px-3 py-2 text-left align-middle font-semibold whitespace-nowrap; }
+.table td { @apply border-b px-3 py-2 align-middle tabular-nums; }
+.table tbody tr:hover { @apply bg-gray-50; }
+/* Buttons/badges inside cells shouldn't push row height around. */
+.table td .btn,
+.table td .btn-primary,
+.table td .btn-outline,
+.table td .btn-danger { @apply py-1; }
