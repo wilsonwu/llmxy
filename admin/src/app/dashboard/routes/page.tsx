@@ -40,17 +40,17 @@ const empty: R = {
 
 const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
   weighted: {
-    title: "weighted — 加权随机分流",
-    body: "按 weight 加权随机抽中主目标；其余目标按权重随机排成兜底链。适合多渠道分摊成本、A/B 灰度、多 Key 限流均衡。配置：只需填 weight。",
+    title: "weighted — weighted random split",
+    body: "Pick the primary target by weighted random sampling; remaining targets form a weighted-random fallback chain. Good for cost-splitting across channels, A/B rollouts, and balancing rate limits across multiple keys. Config: just set weight.",
   },
   fallback: {
-    title: "fallback — 优先级 + 顺序兜底",
-    body: "按 order 升序排,第一个为主,其余按顺序兜底。适合\u201c主用便宜渠道,挂了切贵的\u201d这种有明确优先级的场景。配置：只需填 order。",
+    title: "fallback — priority + ordered failover",
+    body: "Sort by order ascending — the first is primary, the rest are fallbacks in order. Good for \"prefer the cheap channel, switch to the expensive one when it fails\" — scenarios with explicit priority. Config: just set order.",
   },
   smart: {
-    title: "smart — 按 prompt 内容智能选择",
+    title: "smart — pick by prompt content",
     body:
-      "规则匹配(零代码,内置预设)优先;未命中时可选用 embedding 分类器,把 prompt 与每个 label 的样例文本做向量相似度比对;再未命中则回退到 default label。",
+      "Rule matching (zero-code, built-in presets) runs first; on a miss, an optional embedding classifier compares the prompt to each label's exemplar texts via vector similarity; if still unmatched, falls back to the default label.",
   },
 };
 
@@ -58,11 +58,11 @@ const PRESETS: { id: string; title: string; hint: string; label: string }[] = [
   { id: "code_block", title: "Contains code block (```)", hint: "Prompt has ``` fences — programming/code review tasks", label: "code" },
   { id: "long_prompt", title: "Long prompt (~>800 tokens)", hint: "Long context — usually needs stronger model", label: "long" },
   { id: "short_prompt", title: "Short prompt (~≤80 tokens)", hint: "Tiny question — cheap model fine", label: "short" },
-  { id: "translate", title: "Translation request", hint: "Mentions translate / 翻译 / translation", label: "translate" },
-  { id: "math", title: "Math / calculation", hint: "Mentions solve / equation / 求解 / 证明 / LaTeX markers", label: "math" },
-  { id: "reasoning", title: "Reasoning / step-by-step", hint: "Mentions step-by-step / chain of thought / 推理", label: "reasoning" },
-  { id: "summarize", title: "Summarization", hint: "Mentions summarize / tl;dr / 总结 / 摘要", label: "summarize" },
-  { id: "creative", title: "Creative writing", hint: "Mentions story / poem / 故事 / 小说", label: "creative" },
+  { id: "translate", title: "Translation request", hint: "Mentions translate / translation", label: "translate" },
+  { id: "math", title: "Math / calculation", hint: "Mentions solve / equation / proof / LaTeX markers", label: "math" },
+  { id: "reasoning", title: "Reasoning / step-by-step", hint: "Mentions step-by-step / chain of thought", label: "reasoning" },
+  { id: "summarize", title: "Summarization", hint: "Mentions summarize / tl;dr / summary", label: "summarize" },
+  { id: "creative", title: "Creative writing", hint: "Mentions story / poem / novel", label: "creative" },
   { id: "chinese", title: "Chinese (CJK ≥30%)", hint: "Mostly Chinese characters", label: "chinese" },
   { id: "english", title: "English-only", hint: "Almost no CJK characters", label: "english" },
 ];
@@ -383,7 +383,7 @@ export default function RoutesPage() {
                           {rule.type === "keyword" && (
                             <>
                               <span className="rounded bg-gray-200 px-2 py-0.5 text-xs">keyword</span>
-                              <input className="input flex-1" placeholder="regex (case-insensitive) e.g. \\b(refund|退款)\\b"
+                              <input className="input flex-1" placeholder="regex (case-insensitive) e.g. \\b(refund|chargeback)\\b"
                                 value={(rule as any).pattern}
                                 onChange={(ev) => update({ pattern: ev.target.value } as any)} />
                               <span className="text-xs">→</span>
