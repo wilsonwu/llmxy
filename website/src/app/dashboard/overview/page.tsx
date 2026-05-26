@@ -193,8 +193,11 @@ export default function Overview() {
 {`curl ${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}/v1/chat/completions \\
   -H "Authorization: Bearer sk-xxx" \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'`}
+  -d '{"model":"<your-model>","messages":[{"role":"user","content":"hi"}]}'`}
         </pre>
+        <p className="mt-2 text-xs text-gray-500">
+          See <a href="/dashboard/models" className="text-brand-600 hover:underline">Models</a> for the live model list and copy-ready snippets (curl / JS / Python).
+        </p>
       </div>
     </div>
   );

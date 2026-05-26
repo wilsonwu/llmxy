@@ -56,6 +56,11 @@ class RouteStrategy(str, enum.Enum):
     fallback = "fallback"
 
 
+class RouteScope(str, enum.Enum):
+    public = "public"   # listed in /v1/models, callable by any user
+    private = "private"  # hidden from listing & user calls; reserved for internal use (e.g. smart classifier)
+
+
 class BalanceTxType(str, enum.Enum):
     topup = "topup"
     consume = "consume"
@@ -169,8 +174,6 @@ class Channel(Base):
     base_url: Mapped[str] = mapped_column(String(512))
     api_key_enc: Mapped[Optional[str]] = mapped_column(String(512))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    priority: Mapped[int] = mapped_column(Integer, default=100)
-    weight: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -197,7 +200,21 @@ class RoutePolicy(Base):
     user_facing_model: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     strategy: Mapped[RouteStrategy] = mapped_column(SAEnum(RouteStrategy), default=RouteStrategy.weighted)
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
-    # targets: [{model_id:int, weight:int, fallback_order:int}]
+    # targets: [{model_id:int, weight:int, fallback_order:int, label?:str}]
+    # ---- smart-strategy config (ignored unless strategy=smart) ----
+    smart_classifier_model_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+    )
+    smart_rules_jsonb: Mapped[list] = mapped_column(JSON, default=list)
+    # rules: ordered list; first hit wins. Forms:
+    #   {"type":"tokens","threshold":500,"gt_label":"strong","lte_label":"cheap"}
+    #   {"type":"keyword","pattern":"<python-regex>","label":"<label>"}
+    #   {"type":"code_block","label":"<label>"}
+    smart_default_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # smart_classifier_hint: free-text guidance appended to classifier system prompt
+    # ("prefer cheap unless task needs reasoning" etc.). Optional, classifier-mode only.
+    smart_classifier_hint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    scope: Mapped[RouteScope] = mapped_column(SAEnum(RouteScope), default=RouteScope.public)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -216,6 +233,11 @@ class UsageLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(32), default="ok")
     request_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # "relay" = main upstream call; "classifier" = smart-mode classifier overhead.
+    # Same request_id ties classifier rows to their relay row.
+    kind: Mapped[str] = mapped_column(String(16), default="relay")
+    # Label chosen by smart routing (rules or classifier). Null for non-smart.
+    resolved_label: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 

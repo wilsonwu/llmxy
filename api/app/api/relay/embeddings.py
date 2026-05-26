@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.relay.chat import _load_route
+from app.api.relay.chat import _load_route, _record_classifier_usage
 from app.core.deps import get_api_key
 from app.db.session import get_db
 from app.models import ApiKey, UsageLog, User
@@ -32,7 +32,10 @@ async def embeddings(
     if not user_facing_model:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
     policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model)
-    decision = providers.select_route(policy, models_by_id, channels_by_id)
+    prompt_text = providers.extract_prompt_text(payload)
+    decision = await providers.select_route(
+        policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+    )
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no upstream")
 
@@ -55,6 +58,8 @@ async def embeddings(
         prompt_tokens=pt, completion_tokens=0, cost_cents=cost,
         latency_ms=int((time.time() - started) * 1000),
         status="ok", request_id=request_id,
+        kind="relay", resolved_label=getattr(decision, "chosen_label", None),
     ))
+    await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
     await db.commit()
     return JSONResponse(body)

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_api_key
 from app.db.session import get_db
-from app.models import ApiKey, RoutePolicy, User
+from app.models import ApiKey, RoutePolicy, RouteScope, User
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
@@ -17,7 +17,12 @@ async def list_models(
     db: AsyncSession = Depends(get_db),
 ):
     rows = (
-        await db.execute(select(RoutePolicy).where(RoutePolicy.enabled.is_(True)))
+        await db.execute(
+            select(RoutePolicy).where(
+                RoutePolicy.enabled.is_(True),
+                RoutePolicy.scope == RouteScope.public,
+            )
+        )
     ).scalars().all()
     data = [
         {"id": r.user_facing_model, "object": "model", "owned_by": "llmxy"}

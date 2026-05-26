@@ -4,15 +4,35 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, getToken, setToken } from "@/lib/api";
 
-const items = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/dashboard/users", label: "Users" },
-  { href: "/dashboard/channels", label: "Upstream channels" },
-  { href: "/dashboard/models", label: "Models / Rates" },
-  { href: "/dashboard/plans", label: "Plans" },
-  { href: "/dashboard/routes", label: "Smart routing" },
-  { href: "/dashboard/envoy", label: "Envoy instances" },
-  { href: "/dashboard/usage", label: "Usage logs" },
+const sections: { title: string; items: { href: string; label: string }[] }[] = [
+  {
+    title: "Monitor",
+    items: [
+      { href: "/dashboard", label: "Dashboard" },
+      { href: "/dashboard/usage", label: "Usage logs" },
+    ],
+  },
+  {
+    title: "Routing config",
+    items: [
+      { href: "/dashboard/channels", label: "Upstream channels" },
+      { href: "/dashboard/models", label: "Models / Rates" },
+      { href: "/dashboard/routes", label: "Smart routing" },
+    ],
+  },
+  {
+    title: "Customers",
+    items: [
+      { href: "/dashboard/users", label: "Users" },
+      { href: "/dashboard/plans", label: "Plans" },
+    ],
+  },
+  {
+    title: "Infrastructure",
+    items: [
+      { href: "/dashboard/envoy", label: "Envoy instances" },
+    ],
+  },
 ];
 
 type Me = { email: string; role: string };
@@ -38,12 +58,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
           )}
         </div>
-        <nav className="flex-1 space-y-1 p-3">
-          {items.map((i) => (
-            <Link key={i.href} href={i.href}
-              className={`block rounded px-3 py-2 text-sm ${pathname === i.href ? "bg-brand-600 text-white" : "hover:bg-gray-100"}`}>
-              {i.label}
-            </Link>
+        <nav className="flex-1 space-y-4 p-3">
+          {sections.map((sec) => (
+            <div key={sec.title}>
+              <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                {sec.title}
+              </div>
+              <div className="space-y-1">
+                {sec.items.map((i) => (
+                  <Link key={i.href} href={i.href}
+                    className={`block rounded px-3 py-2 text-sm ${pathname === i.href ? "bg-brand-600 text-white" : "hover:bg-gray-100"}`}>
+                    {i.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         <button className="m-3 rounded border border-red-200 px-3 py-2 text-sm text-red-600 hover:bg-red-50"

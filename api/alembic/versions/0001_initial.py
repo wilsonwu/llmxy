@@ -97,8 +97,6 @@ def upgrade() -> None:
         sa.Column("base_url", sa.String(512)),
         sa.Column("api_key_enc", sa.String(512)),
         sa.Column("enabled", sa.Boolean, server_default=sa.true()),
-        sa.Column("priority", sa.Integer, server_default="100"),
-        sa.Column("weight", sa.Integer, server_default="1"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
@@ -121,6 +119,11 @@ def upgrade() -> None:
         sa.Column("user_facing_model", sa.String(128), unique=True, index=True),
         sa.Column("strategy", sa.Enum("weighted", "smart", "fallback", name="routestrategy"), server_default="weighted"),
         sa.Column("targets_jsonb", sa.JSON),
+        sa.Column("smart_classifier_model_id", sa.Integer, sa.ForeignKey("models.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("smart_rules_jsonb", sa.JSON, server_default=sa.text("'[]'")),
+        sa.Column("smart_default_label", sa.String(64), nullable=True),
+        sa.Column("smart_classifier_hint", sa.Text, nullable=True),
+        sa.Column("scope", sa.Enum("public", "private", name="routescope"), server_default="public"),
         sa.Column("enabled", sa.Boolean, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
@@ -139,6 +142,8 @@ def upgrade() -> None:
         sa.Column("latency_ms", sa.Integer, server_default="0"),
         sa.Column("status", sa.String(32), server_default="ok"),
         sa.Column("request_id", sa.String(64)),
+        sa.Column("kind", sa.String(16), nullable=False, server_default="relay"),
+        sa.Column("resolved_label", sa.String(64)),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), index=True),
     )
 
@@ -206,5 +211,5 @@ def downgrade() -> None:
         "api_keys", "users",
     ]:
         op.drop_table(t)
-    for e in ["balancetxtype", "routestrategy", "orderstatus", "paymentchannel", "keystatus", "userstatus", "userrole"]:
+    for e in ["balancetxtype", "routescope", "routestrategy", "orderstatus", "paymentchannel", "keystatus", "userstatus", "userrole"]:
         op.execute(f"DROP TYPE IF EXISTS {e}")

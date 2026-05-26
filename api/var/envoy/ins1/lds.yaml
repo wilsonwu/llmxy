@@ -39,6 +39,7 @@ resources:
             - x-llmxy-upstream-model
             - x-llmxy-provider-type
             - x-llmxy-cluster
+            - x-llmxy-resolved-label
         http_filters:
         - name: envoy.filters.http.ext_authz
           typed_config:

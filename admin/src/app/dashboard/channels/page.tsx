@@ -3,9 +3,9 @@ import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 
-type C = { id?: number; name: string; provider_type: string; base_url: string; api_key_enc?: string; enabled: boolean; priority: number; weight: number };
+type C = { id?: number; name: string; provider_type: string; base_url: string; api_key_enc?: string; enabled: boolean };
 
-const empty: C = { name: "", provider_type: "openai", base_url: "https://api.openai.com/v1", api_key_enc: "", enabled: true, priority: 100, weight: 1 };
+const empty: C = { name: "", provider_type: "openai", base_url: "https://api.openai.com/v1", api_key_enc: "", enabled: true };
 
 const PROVIDERS = [
   { id: "openai", label: "OpenAI-compatible (OpenAI/DeepSeek/Moonshot/Qwen...)" },
@@ -43,12 +43,12 @@ export default function ChannelsPage() {
       </div>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>BaseURL</th><th>Weight</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>BaseURL</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
             {filtered.map((c) => (
               <tr key={c.id}>
                 <td>{c.id}</td><td>{c.name}</td><td>{c.provider_type}</td><td className="font-mono text-xs">{c.base_url}</td>
-                <td>{c.weight}</td><td>{c.enabled ? "✓" : "—"}</td>
+                <td>{c.enabled ? "✓" : "—"}</td>
                 <td className="space-x-2">
                   <button className="btn-outline" onClick={() => setEditing({ ...c, api_key_enc: c.api_key_enc || "" })}>Edit</button>
                   <button className="btn-danger" onClick={() => del(c.id!)}>Delete</button>
@@ -81,15 +81,7 @@ export default function ChannelsPage() {
               <input className="input w-full" type="password" value={editing.api_key_enc || ""} onChange={(e) => setEditing({ ...editing, api_key_enc: e.target.value })} />
             </div>
             <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="label">priority</label>
-                <input type="number" className="input w-full" value={editing.priority} onChange={(e) => setEditing({ ...editing, priority: +e.target.value })} />
-              </div>
-              <div className="flex-1">
-                <label className="label">weight</label>
-                <input type="number" className="input w-full" value={editing.weight} onChange={(e) => setEditing({ ...editing, weight: +e.target.value })} />
-              </div>
-              <label className="flex items-center gap-2 pt-5">
+              <label className="flex items-center gap-2 pt-1">
                 <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
                 Enabled
               </label>

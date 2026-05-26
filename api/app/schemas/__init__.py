@@ -118,8 +118,6 @@ class ChannelIn(BaseModel):
     base_url: str
     api_key_enc: Optional[str] = None
     enabled: bool = True
-    priority: int = 100
-    weight: int = 1
 
 
 class ChannelOut(ChannelIn):
@@ -150,12 +148,32 @@ class RouteTarget(BaseModel):
     model_id: int
     weight: int = 1
     fallback_order: int = 0
+    label: Optional[str] = None  # for smart strategy: matches rule/classifier output
+
+
+class RouteRule(BaseModel):
+    type: str  # "preset" | "tokens" | "keyword" | "code_block"
+    # for preset:
+    id: Optional[str] = None
+    # for tokens:
+    threshold: Optional[int] = None
+    gt_label: Optional[str] = None
+    lte_label: Optional[str] = None
+    # for keyword:
+    pattern: Optional[str] = None
+    # for preset / keyword / code_block:
+    label: Optional[str] = None
 
 
 class RoutePolicyIn(BaseModel):
     user_facing_model: str
     strategy: str = "weighted"  # weighted/smart/fallback
     targets_jsonb: list[RouteTarget] = []
+    smart_classifier_model_id: Optional[int] = None
+    smart_rules_jsonb: list[RouteRule] = []
+    smart_default_label: Optional[str] = None
+    smart_classifier_hint: Optional[str] = None
+    scope: str = "public"  # public | private
     enabled: bool = True
 
 
@@ -164,6 +182,11 @@ class RoutePolicyOut(BaseModel):
     user_facing_model: str
     strategy: str
     targets_jsonb: list[dict]
+    smart_classifier_model_id: Optional[int] = None
+    smart_rules_jsonb: list[dict] = []
+    smart_default_label: Optional[str] = None
+    smart_classifier_hint: Optional[str] = None
+    scope: str = "public"
     enabled: bool
 
     class Config:
@@ -184,6 +207,8 @@ class UsageLogOut(BaseModel):
     latency_ms: int
     status: str
     created_at: datetime
+    kind: Optional[str] = "relay"
+    resolved_label: Optional[str] = None
 
     class Config:
         from_attributes = True

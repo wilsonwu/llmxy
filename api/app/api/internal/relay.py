@@ -32,9 +32,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.crypto import decrypt
 from app.core.security import hash_api_key
 from app.db.session import AsyncSessionLocal
-from app.models import ApiKey, Channel, KeyStatus, Model, RoutePolicy, User, UserStatus
+from app.models import ApiKey, Channel, KeyStatus, Model, RoutePolicy, RouteScope, UsageLog, User, UserStatus
 from app.services import providers
-from app.services.billing import has_quota
+from app.services.billing import calc_cost_cents, charge_user, has_quota
 from app.services.envoy.config import _channel_cluster_name, _is_direct
 from app.services.quota import rate_limit, user_rpm
 
@@ -46,7 +46,7 @@ async def _load_route(db: AsyncSession, user_facing_model: str):
     policy = (
         await db.execute(select(RoutePolicy).where(RoutePolicy.user_facing_model == user_facing_model))
     ).scalar_one_or_none()
-    if not policy or not policy.enabled:
+    if not policy or not policy.enabled or policy.scope == RouteScope.private:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"model {user_facing_model} not available")
     target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
     if not target_ids:
@@ -130,13 +130,40 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model in body")
 
         policy, models_by_id, channels_by_id = await _load_route(db, model_name)
-        decision = providers.select_route(policy, models_by_id, channels_by_id)
+        try:
+            parsed_payload = json.loads(body) if body else None
+        except Exception:
+            parsed_payload = None
+        prompt_text = providers.extract_prompt_text(parsed_payload) if parsed_payload else ""
+        decision = await providers.select_route(
+            policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+        )
         if not decision:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no available upstream")
 
         m, c = decision.model, decision.channel
         rid = request.headers.get("x-request-id") or f"req-{uuid.uuid4().hex[:16]}"
         cluster = _channel_cluster_name(c.id) if _is_direct(c) else "translator"
+
+        # Smart-mode classifier overhead is invisible to Envoy/ALS — record it
+        # here so it shows up in usage/billing tied to the same request_id.
+        cu = getattr(decision, "classifier_usage", None)
+        if cu is not None:
+            try:
+                cls_cost = calc_cost_cents(cu.model, cu.prompt_tokens, cu.completion_tokens) if cu.status == "ok" else 0
+                if cls_cost > 0:
+                    await charge_user(db, user, api_key, cls_cost, ref_id=rid, note=f"{model_name} [classifier]")
+                db.add(UsageLog(
+                    user_id=user.id, api_key_id=api_key.id, model_id=cu.model.id,
+                    user_facing_model=model_name, upstream_model=cu.upstream_model,
+                    prompt_tokens=cu.prompt_tokens, completion_tokens=cu.completion_tokens,
+                    cost_cents=cls_cost, latency_ms=cu.latency_ms,
+                    status=cu.status, request_id=rid,
+                    kind="classifier", resolved_label=decision.chosen_label,
+                ))
+                await db.commit()
+            except Exception as e:
+                log.warning("classifier usage log failed rid=%s: %s", rid, e)
 
         headers: dict[str, str] = {
             "x-llmxy-cluster": cluster,
@@ -149,6 +176,8 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
             "x-llmxy-provider-type": (c.provider_type or "").lower(),
             "x-llmxy-channel-id": str(c.id),
         }
+        if decision.chosen_label:
+            headers["x-llmxy-resolved-label"] = decision.chosen_label
 
         # Inject upstream credentials only for direct (OpenAI-compat) clusters.
         # Translator cluster reaches our own FastAPI which holds the channel

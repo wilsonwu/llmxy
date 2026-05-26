@@ -23,8 +23,6 @@ def _to_out(row: Channel) -> dict:
         "base_url": row.base_url,
         "api_key_enc": mask(row.api_key_enc),
         "enabled": row.enabled,
-        "priority": row.priority,
-        "weight": row.weight,
     }
 
 

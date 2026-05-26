@@ -7,6 +7,7 @@ type Log = {
   id: number; user_facing_model: string; upstream_model: string;
   prompt_tokens: number; completion_tokens: number;
   cost_cents: number; latency_ms: number; status: string; created_at: string;
+  kind?: string; resolved_label?: string | null;
 };
 
 const PAGE_SIZE = 20;
@@ -26,7 +27,7 @@ export default function UsagePage() {
       <div className="card overflow-x-auto">
         <table className="table">
           <thead>
-            <tr><th>Time</th><th>Model</th><th>Upstream</th><th>prompt</th><th>completion</th><th>Cost</th><th>Latency</th><th>Status</th></tr>
+            <tr><th>Time</th><th>Model</th><th>Upstream</th><th>Kind</th><th>Label</th><th>prompt</th><th>completion</th><th>Cost</th><th>Latency</th><th>Status</th></tr>
           </thead>
           <tbody>
             {data?.items?.map((l) => (
@@ -34,6 +35,14 @@ export default function UsagePage() {
                 <td>{new Date(l.created_at).toLocaleString()}</td>
                 <td>{l.user_facing_model}</td>
                 <td>{l.upstream_model}</td>
+                <td>
+                  {l.kind === "classifier"
+                    ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">classifier</span>
+                    : <span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-800">relay</span>}
+                </td>
+                <td>{l.resolved_label
+                  ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">{l.resolved_label}</span>
+                  : <span className="text-gray-400">-</span>}</td>
                 <td>{l.prompt_tokens}</td>
                 <td>{l.completion_tokens}</td>
                 <td>${(l.cost_cents / 100).toFixed(4)}</td>
@@ -41,7 +50,7 @@ export default function UsagePage() {
                 <td>{l.status}</td>
               </tr>
             ))}
-            {!data?.items?.length && <tr><td colSpan={8} className="text-center text-gray-500">No records</td></tr>}
+            {!data?.items?.length && <tr><td colSpan={10} className="text-center text-gray-500">No records</td></tr>}
           </tbody>
         </table>
       </div>

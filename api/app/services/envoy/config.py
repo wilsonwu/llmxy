@@ -332,7 +332,7 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                     "x-llmxy-request-id", "x-llmxy-user-id", "x-llmxy-api-key-id",
                     "x-llmxy-model-id", "x-llmxy-user-facing-model",
                     "x-llmxy-upstream-model", "x-llmxy-provider-type",
-                    "x-llmxy-cluster",
+                    "x-llmxy-cluster", "x-llmxy-resolved-label",
                 ],
             },
         }],

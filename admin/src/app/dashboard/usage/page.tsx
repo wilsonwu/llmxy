@@ -14,6 +14,8 @@ type Log = {
   cost_cents: number;
   latency_ms: number;
   status: string;
+  kind?: string;
+  resolved_label?: string | null;
   created_at: string;
 };
 
@@ -28,6 +30,8 @@ export default function AdminUsagePage() {
     user_facing_model: "",
     upstream_model: "",
     status: "",
+    kind: "",
+    resolved_label: "",
     start: "",
     end: "",
   });
@@ -48,7 +52,7 @@ export default function AdminUsagePage() {
     setApplied(filters);
   }
   function reset() {
-    const blank = { user_id: "", api_key_id: "", model_id: "", user_facing_model: "", upstream_model: "", status: "", start: "", end: "" };
+    const blank = { user_id: "", api_key_id: "", model_id: "", user_facing_model: "", upstream_model: "", status: "", kind: "", resolved_label: "", start: "", end: "" };
     setFilters(blank);
     setApplied(blank);
     setPage(1);
@@ -74,6 +78,14 @@ export default function AdminUsagePage() {
           onChange={(e) => setFilters({ ...filters, start: e.target.value })} />
         <input className="input" type="datetime-local" value={filters.end}
           onChange={(e) => setFilters({ ...filters, end: e.target.value })} />
+        <select className="input" value={filters.kind}
+          onChange={(e) => setFilters({ ...filters, kind: e.target.value })}>
+          <option value="">kind (all)</option>
+          <option value="relay">relay</option>
+          <option value="classifier">classifier</option>
+        </select>
+        <input className="input" placeholder="resolved_label" value={filters.resolved_label}
+          onChange={(e) => setFilters({ ...filters, resolved_label: e.target.value })} />
         <div className="col-span-2 flex gap-2 md:col-span-4">
           <button className="btn-primary" onClick={apply}>Apply</button>
           <button className="btn-outline" onClick={reset}>Reset</button>
@@ -86,6 +98,7 @@ export default function AdminUsagePage() {
             <tr>
               <th>Time</th><th>User</th><th>Key</th>
               <th>User-facing model</th><th>Upstream model</th>
+              <th>Kind</th><th>Label</th>
               <th>prompt</th><th>completion</th>
               <th>Cost</th><th>Latency</th><th>Status</th>
             </tr>
@@ -98,6 +111,20 @@ export default function AdminUsagePage() {
                 <td>{(l as any).api_key_id ?? "-"}</td>
                 <td>{l.user_facing_model || "-"}</td>
                 <td className="font-mono text-xs">{l.upstream_model || "-"}</td>
+                <td>
+                  {l.kind === "classifier" ? (
+                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">classifier</span>
+                  ) : (
+                    <span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-800">relay</span>
+                  )}
+                </td>
+                <td>
+                  {l.resolved_label ? (
+                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">{l.resolved_label}</span>
+                  ) : (
+                    <span className="text-gray-400">-</span>
+                  )}
+                </td>
                 <td>{l.prompt_tokens}</td>
                 <td>{l.completion_tokens}</td>
                 <td>${(l.cost_cents / 100).toFixed(4)}</td>
@@ -106,7 +133,7 @@ export default function AdminUsagePage() {
               </tr>
             ))}
             {!data?.items?.length && (
-              <tr><td colSpan={10} className="text-center text-gray-500">No records</td></tr>
+              <tr><td colSpan={12} className="text-center text-gray-500">No records</td></tr>
             )}
           </tbody>
         </table>

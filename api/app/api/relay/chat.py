@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_api_key
 from app.db.session import get_db
-from app.models import ApiKey, Channel, Model, RoutePolicy, UsageLog, User
+from app.models import ApiKey, Channel, Model, RoutePolicy, RouteScope, UsageLog, User
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user, has_quota
 from app.services.quota import rate_limit, user_rpm
@@ -24,7 +24,7 @@ async def _load_route(db: AsyncSession, user_facing_model: str) -> tuple[RoutePo
     policy = (
         await db.execute(select(RoutePolicy).where(RoutePolicy.user_facing_model == user_facing_model))
     ).scalar_one_or_none()
-    if not policy or not policy.enabled:
+    if not policy or not policy.enabled or policy.scope == RouteScope.private:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"model {user_facing_model} not available")
     target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
     if not target_ids:
@@ -35,6 +35,33 @@ async def _load_route(db: AsyncSession, user_facing_model: str) -> tuple[RoutePo
     channels = (await db.execute(select(Channel).where(Channel.id.in_(channel_ids)))).scalars().all()
     channels_by_id = {c.id: c for c in channels}
     return policy, models_by_id, channels_by_id
+
+
+async def _record_classifier_usage(
+    db: AsyncSession,
+    user: User,
+    api_key: ApiKey,
+    decision,
+    user_facing_model: str,
+    request_id: str,
+) -> None:
+    """If smart routing called a classifier model, charge for it and log a row.
+    Tied to the relay row by request_id; kind='classifier'.
+    """
+    cu = getattr(decision, "classifier_usage", None)
+    if not cu:
+        return
+    cost = calc_cost_cents(cu.model, cu.prompt_tokens, cu.completion_tokens) if cu.status == "ok" else 0
+    if cost > 0:
+        await charge_user(db, user, api_key, cost, ref_id=request_id, note=f"{user_facing_model} [classifier]")
+    db.add(UsageLog(
+        user_id=user.id, api_key_id=api_key.id, model_id=cu.model.id,
+        user_facing_model=user_facing_model, upstream_model=cu.upstream_model,
+        prompt_tokens=cu.prompt_tokens, completion_tokens=cu.completion_tokens,
+        cost_cents=cost, latency_ms=cu.latency_ms,
+        status=cu.status, request_id=request_id,
+        kind="classifier", resolved_label=getattr(decision, "chosen_label", None),
+    ))
 
 
 @router.post("/chat/completions")
@@ -62,13 +89,17 @@ async def chat_completions(
 
     stream = bool(payload.get("stream"))
     policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model)
-    decision = providers.select_route(policy, models_by_id, channels_by_id)
+    prompt_text = providers.extract_prompt_text(payload)
+    decision = await providers.select_route(
+        policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+    )
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no available upstream")
 
     request_id = request_id_var.get() or f"req-{uuid.uuid4().hex[:16]}"
     started = time.time()
     candidates = [(decision.model, decision.channel)] + decision.fallback_chain
+    resolved_label = getattr(decision, "chosen_label", None)
 
     if stream:
         async def streamer() -> AsyncIterator[bytes]:
@@ -100,7 +131,9 @@ async def chat_completions(
                     prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                     cost_cents=cost, latency_ms=int((time.time() - started) * 1000),
                     status="ok", request_id=request_id,
+                    kind="relay", resolved_label=resolved_label,
                 ))
+                await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
                 await db.commit()
                 return
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")
@@ -125,7 +158,9 @@ async def chat_completions(
                 prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
                 cost_cents=cost, latency_ms=int((time.time() - started) * 1000),
                 status="ok", request_id=request_id,
+                kind="relay", resolved_label=resolved_label,
             ))
+            await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
             await db.commit()
             return JSONResponse(result.body)
         last_err = result.body

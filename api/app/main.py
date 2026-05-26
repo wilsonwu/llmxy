@@ -13,7 +13,7 @@ from app.api.internal import translate as internal_translate
 from app.api.relay import chat as relay_chat
 from app.api.relay import embeddings as relay_embeddings
 from app.api.relay import models_list as relay_models
-from app.api.v1 import api_keys, auth, orders, plans, subscriptions, transport, usage
+from app.api.v1 import api_keys, auth, models as v1_models, orders, plans, subscriptions, transport, usage
 from app.api.v1.admin import channels as admin_channels
 from app.api.v1.admin import envoy as admin_envoy
 from app.api.v1.admin import models as admin_models
@@ -156,6 +156,7 @@ app.include_router(orders.payments_router, prefix=V1)
 app.include_router(usage.router, prefix=V1)
 app.include_router(transport.router, prefix=V1)
 app.include_router(subscriptions.router, prefix=V1)
+app.include_router(v1_models.router, prefix=V1)
 
 # admin
 ADMIN = "/api/v1/admin"

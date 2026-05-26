@@ -6,6 +6,7 @@ import { getToken, setToken } from "@/lib/api";
 
 const items = [
   { href: "/dashboard/overview", label: "Overview" },
+  { href: "/dashboard/models", label: "Models" },
   { href: "/dashboard/keys", label: "API Keys" },
   { href: "/dashboard/usage", label: "Usage" },
   { href: "/dashboard/billing", label: "Billing" },

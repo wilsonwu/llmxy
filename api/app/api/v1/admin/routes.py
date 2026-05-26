@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_admin
 from app.db.session import get_db
-from app.models import RoutePolicy, RouteStrategy, User
+from app.models import RoutePolicy, RouteScope, RouteStrategy, User
 from app.schemas import RoutePolicyIn, RoutePolicyOut
 from app.services.envoy.config import regenerate_all_running
 
@@ -23,6 +23,11 @@ def _to_orm(req: RoutePolicyIn) -> dict:
         "user_facing_model": req.user_facing_model,
         "strategy": RouteStrategy(req.strategy),
         "targets_jsonb": [t.model_dump() for t in req.targets_jsonb],
+        "smart_classifier_model_id": req.smart_classifier_model_id,
+        "smart_rules_jsonb": [r.model_dump(exclude_none=True) for r in req.smart_rules_jsonb],
+        "smart_default_label": req.smart_default_label,
+        "smart_classifier_hint": req.smart_classifier_hint,
+        "scope": RouteScope(req.scope),
         "enabled": req.enabled,
     }
 

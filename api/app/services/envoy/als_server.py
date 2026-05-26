@@ -85,6 +85,7 @@ async def _write_usage_log_only(
     user_facing_model: str | None, upstream_model: str | None,
     prompt_tokens: int, completion_tokens: int, cost_cents: int,
     latency_ms: int, status: str, request_id: str,
+    resolved_label: str | None = None,
 ) -> None:
     """Fallback path: write a UsageLog row in its own transaction. Used when
     the charge+log transaction rolled back so we still have an audit trail."""
@@ -95,6 +96,7 @@ async def _write_usage_log_only(
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             cost_cents=cost_cents, latency_ms=latency_ms,
             status=status, request_id=request_id,
+            kind="relay", resolved_label=resolved_label,
         ))
         await db.commit()
 
@@ -107,6 +109,7 @@ async def _ingest_entry(entry) -> None:
     model_id = _hdr(headers, "x-llmxy-model-id")
     user_facing_model = _hdr(headers, "x-llmxy-user-facing-model")
     upstream_model = _hdr(headers, "x-llmxy-upstream-model")
+    resolved_label = _hdr(headers, "x-llmxy-resolved-label")
 
     if not user_id or not model_id:
         # Likely a /v1/models listing or other non-billable call.
@@ -153,6 +156,7 @@ async def _ingest_entry(entry) -> None:
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                 cost_cents=cost, latency_ms=duration_ms,
                 status=status_str, request_id=request_id,
+                kind="relay", resolved_label=resolved_label,
             ))
             await db.commit()
     except Exception as e:
@@ -167,6 +171,7 @@ async def _ingest_entry(entry) -> None:
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                 cost_cents=0, latency_ms=duration_ms,
                 status="error", request_id=request_id,
+                resolved_label=resolved_label,
             )
         except Exception as e2:
             log.error("ALS degraded log write also failed rid=%s: %s", request_id, e2)

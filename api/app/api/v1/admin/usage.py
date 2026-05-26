@@ -25,6 +25,8 @@ async def admin_logs(
     status: Optional[str] = None,
     user_facing_model: Optional[str] = None,
     upstream_model: Optional[str] = None,
+    kind: Optional[str] = None,
+    resolved_label: Optional[str] = None,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
     _: User = Depends(require_admin),
@@ -43,6 +45,10 @@ async def admin_logs(
         base = base.where(UsageLog.user_facing_model == user_facing_model)
     if upstream_model:
         base = base.where(UsageLog.upstream_model == upstream_model)
+    if kind:
+        base = base.where(UsageLog.kind == kind)
+    if resolved_label:
+        base = base.where(UsageLog.resolved_label == resolved_label)
     if start is not None:
         base = base.where(UsageLog.created_at >= start)
     if end is not None:
