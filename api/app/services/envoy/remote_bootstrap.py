@@ -49,7 +49,11 @@ def _grpc_cluster(name: str, host: str, port: int, token: str) -> dict[str, Any]
 def render_remote_bootstrap(inst: EnvoyInstance) -> dict[str, Any]:
     """Bootstrap dict. Caller serializes to YAML via render_bootstrap_yaml."""
     host = settings.CONTROL_PLANE_PUBLIC_HOST or "127.0.0.1"
-    token = settings.XDS_AUTH_TOKEN or ""
+    # Bootstrap always uses the FIRST token in XDS_AUTH_TOKEN (csv supports
+    # rotation: server accepts all listed, but new envoy templates emit the
+    # current/primary one only).
+    raw_token = settings.XDS_AUTH_TOKEN or ""
+    token = next((t.strip() for t in raw_token.split(",") if t.strip()), "")
 
     grpc_service = {
         "envoy_grpc": {"cluster_name": "xds_cluster"},

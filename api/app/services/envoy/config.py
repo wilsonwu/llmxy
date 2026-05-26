@@ -34,18 +34,11 @@ log = logging.getLogger(__name__)
 # We do NOT rely on cjson — bundled envoy Lua doesn't ship it. Instead we use
 # string.match on the OpenAI-style `"usage": { ... }` block, which is stable
 # across openai / azure-openai / most compat backends.
+#
+# Streaming: SSE responses are scanned per chunk via handle:bodyChunks() so
+# the proxy never buffers the full response — preserves TTFT for clients.
+# Non-stream JSON uses handle:body() (bounded by per_connection_buffer_limit).
 USAGE_LUA = r"""
-local function extract_usage(s)
-  if not s or #s == 0 then return 0, 0 end
-  -- Match "usage": { ... "prompt_tokens": N ... "completion_tokens": M ... }
-  -- Tokens may appear in either order, with arbitrary whitespace.
-  local block = string.match(s, '"usage"%s*:%s*(%b{})')
-  if not block then return 0, 0 end
-  local pt = tonumber(string.match(block, '"prompt_tokens"%s*:%s*(%d+)')) or 0
-  local ct = tonumber(string.match(block, '"completion_tokens"%s*:%s*(%d+)')) or 0
-  return pt, ct
-end
-
 function envoy_on_request(handle)
   local path = handle:headers():get(":path") or ""
   if not string.find(path, "/v1/chat/completions", 1, true) then return end
@@ -75,26 +68,44 @@ function envoy_on_request(handle)
   end
 end
 
+local function scan_usage(raw, last_pt, last_ct)
+  for block in string.gmatch(raw, '"usage"%s*:%s*(%b{})') do
+    local p = tonumber(string.match(block, '"prompt_tokens"%s*:%s*(%d+)'))
+    local c = tonumber(string.match(block, '"completion_tokens"%s*:%s*(%d+)'))
+    if p or c then last_pt, last_ct = p or last_pt, c or last_ct end
+  end
+  return last_pt, last_ct
+end
+
 function envoy_on_response(handle)
   local ct_hdr = (handle:headers():get("content-type") or ""):lower()
-  local body = handle:body()
-  if not body then return end
-  local len = body:length()
-  if len == 0 then return end
-  local raw = body:getBytes(0, len)
   local pt, ct_tok = 0, 0
   if string.find(ct_hdr, "text/event-stream", 1, true) then
-    -- For SSE, the usage block lives in the last `data:` frame that has it.
-    -- Search the whole concatenated body — the last match wins.
-    local last_pt, last_ct = 0, 0
-    for block in string.gmatch(raw, '"usage"%s*:%s*(%b{})') do
-      local p = tonumber(string.match(block, '"prompt_tokens"%s*:%s*(%d+)'))
-      local c = tonumber(string.match(block, '"completion_tokens"%s*:%s*(%d+)'))
-      if p or c then last_pt, last_ct = p or last_pt, c or last_ct end
+    -- Streaming: iterate chunks as they pass through — no full-body buffer.
+    -- A chunk may split a "usage": {...} block across boundaries; we carry a
+    -- small tail (last 4KB) between chunks to absorb that case.
+    local carry = ""
+    for chunk in handle:bodyChunks() do
+      local len = chunk:length()
+      if len > 0 then
+        local raw = chunk:getBytes(0, len)
+        local scanbuf = carry .. raw
+        pt, ct_tok = scan_usage(scanbuf, pt, ct_tok)
+        if #scanbuf > 4096 then
+          carry = string.sub(scanbuf, -4096)
+        else
+          carry = scanbuf
+        end
+      end
     end
-    pt, ct_tok = last_pt, last_ct
   else
-    pt, ct_tok = extract_usage(raw)
+    local body = handle:body()
+    if body then
+      local len = body:length()
+      if len > 0 then
+        pt, ct_tok = scan_usage(body:getBytes(0, len), 0, 0)
+      end
+    end
   end
   if pt > 0 or ct_tok > 0 then
     handle:streamInfo():dynamicMetadata():set(
@@ -335,7 +346,7 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                         "server_uri": {
                             "uri": f"http://{settings.INTERNAL_API_HOST}:{settings.INTERNAL_API_PORT}",
                             "cluster": "ext_authz",
-                            "timeout": "5s",
+                            "timeout": settings.ENVOY_EXT_AUTHZ_TIMEOUT,
                         },
                         "path_prefix": "/internal/relay/authz",
                         "authorization_request": {
@@ -359,11 +370,15 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                         },
                     },
                     "with_request_body": {
-                        "max_request_bytes": 131072,
+                        "max_request_bytes": settings.ENVOY_EXT_AUTHZ_MAX_BYTES,
                         "allow_partial_message": False,
                         "pack_as_bytes": True,
                     },
                     "failure_mode_allow": False,
+                    # ext_authz returns `x-llmxy-cluster` to pick the upstream;
+                    # the router caches the route on first match, so without
+                    # this flag the original (pre-authz) route — which has no
+                    # cluster_header value bound yet — would be reused.
                     "clear_route_cache": True,
                 },
             },

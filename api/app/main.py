@@ -217,6 +217,14 @@ async def startup() -> None:
     except Exception as e:
         logging.warning("xDS server failed to start (continuing): %s", e)
 
+    # Reconcile any envoy processes that survived an api restart.
+    try:
+        from app.services.envoy import runtime as envoy_runtime
+        await envoy_runtime.adopt_orphans()
+        await envoy_runtime.start_health_monitor()
+    except Exception as e:
+        logging.warning("envoy orphan adoption failed (continuing): %s", e)
+
     # Subscription renewal worker (auto-charge wallet on period boundary).
     try:
         from app.services import subscriptions_renewal
@@ -254,6 +262,11 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    try:
+        from app.services.envoy import runtime as envoy_runtime
+        await envoy_runtime.stop_health_monitor()
+    except Exception:
+        pass
     try:
         from app.services.envoy import xds_server
         await xds_server.stop()

@@ -64,7 +64,7 @@ resources:
                   - exact: x-api-key
                   - exact: anthropic-version
             with_request_body:
-              max_request_bytes: 131072
+              max_request_bytes: 1048576
               allow_partial_message: false
               pack_as_bytes: true
             failure_mode_allow: false
@@ -72,47 +72,47 @@ resources:
         - name: envoy.filters.http.lua
           typed_config:
             '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
-            inline_code: "\nlocal function extract_usage(s)\n  if not s or #s == 0\
-              \ then return 0, 0 end\n  -- Match \"usage\": { ... \"prompt_tokens\"\
-              : N ... \"completion_tokens\": M ... }\n  -- Tokens may appear in either\
-              \ order, with arbitrary whitespace.\n  local block = string.match(s,\
-              \ '\"usage\"%s*:%s*(%b{})')\n  if not block then return 0, 0 end\n \
-              \ local pt = tonumber(string.match(block, '\"prompt_tokens\"%s*:%s*(%d+)'))\
-              \ or 0\n  local ct = tonumber(string.match(block, '\"completion_tokens\"\
-              %s*:%s*(%d+)')) or 0\n  return pt, ct\nend\n\nfunction envoy_on_request(handle)\n\
-              \  local path = handle:headers():get(\":path\") or \"\"\n  if not string.find(path,\
-              \ \"/v1/chat/completions\", 1, true) then return end\n  local body =\
-              \ handle:body()\n  if not body then return end\n  local len = body:length()\n\
-              \  if len == 0 then return end\n  local raw = body:getBytes(0, len)\n\
-              \  -- Only patch streaming requests: ensure include_usage so the final\
-              \ SSE\n  -- chunk carries a usage block. Detection is by string match\
-              \ \u2014 avoids JSON\n  -- parsing in Lua and is safe because \"stream\"\
-              :true is canonical.\n  if not string.find(raw, '\"stream\"%s*:%s*true')\
-              \ then return end\n  if string.find(raw, '\"include_usage\"%s*:%s*true')\
-              \ then return end\n  local patched\n  if string.find(raw, '\"stream_options\"\
-              ') then\n    -- inject include_usage into existing stream_options object\n\
-              \    patched = string.gsub(raw, '(\"stream_options\"%s*:%s*{)',\n  \
-              \                        '%1\"include_usage\":true,', 1)\n  else\n \
-              \   -- append a stream_options field before the closing brace\n    patched\
+            inline_code: "\nfunction envoy_on_request(handle)\n  local path = handle:headers():get(\"\
+              :path\") or \"\"\n  if not string.find(path, \"/v1/chat/completions\"\
+              , 1, true) then return end\n  local body = handle:body()\n  if not body\
+              \ then return end\n  local len = body:length()\n  if len == 0 then return\
+              \ end\n  local raw = body:getBytes(0, len)\n  -- Only patch streaming\
+              \ requests: ensure include_usage so the final SSE\n  -- chunk carries\
+              \ a usage block. Detection is by string match \u2014 avoids JSON\n \
+              \ -- parsing in Lua and is safe because \"stream\":true is canonical.\n\
+              \  if not string.find(raw, '\"stream\"%s*:%s*true') then return end\n\
+              \  if string.find(raw, '\"include_usage\"%s*:%s*true') then return end\n\
+              \  local patched\n  if string.find(raw, '\"stream_options\"') then\n\
+              \    -- inject include_usage into existing stream_options object\n \
+              \   patched = string.gsub(raw, '(\"stream_options\"%s*:%s*{)',\n   \
+              \                       '%1\"include_usage\":true,', 1)\n  else\n  \
+              \  -- append a stream_options field before the closing brace\n    patched\
               \ = string.gsub(raw, '}%s*$',\n                          ',\"stream_options\"\
               :{\"include_usage\":true}}', 1)\n  end\n  if patched and patched ~=\
               \ raw then\n    body:setBytes(patched)\n    handle:headers():replace(\"\
-              content-length\", tostring(#patched))\n  end\nend\n\nfunction envoy_on_response(handle)\n\
-              \  local ct_hdr = (handle:headers():get(\"content-type\") or \"\"):lower()\n\
-              \  local body = handle:body()\n  if not body then return end\n  local\
-              \ len = body:length()\n  if len == 0 then return end\n  local raw =\
-              \ body:getBytes(0, len)\n  local pt, ct_tok = 0, 0\n  if string.find(ct_hdr,\
-              \ \"text/event-stream\", 1, true) then\n    -- For SSE, the usage block\
-              \ lives in the last `data:` frame that has it.\n    -- Search the whole\
-              \ concatenated body \u2014 the last match wins.\n    local last_pt,\
-              \ last_ct = 0, 0\n    for block in string.gmatch(raw, '\"usage\"%s*:%s*(%b{})')\
-              \ do\n      local p = tonumber(string.match(block, '\"prompt_tokens\"\
-              %s*:%s*(%d+)'))\n      local c = tonumber(string.match(block, '\"completion_tokens\"\
-              %s*:%s*(%d+)'))\n      if p or c then last_pt, last_ct = p or last_pt,\
-              \ c or last_ct end\n    end\n    pt, ct_tok = last_pt, last_ct\n  else\n\
-              \    pt, ct_tok = extract_usage(raw)\n  end\n  if pt > 0 or ct_tok >\
-              \ 0 then\n    handle:streamInfo():dynamicMetadata():set(\n      \"llmxy.usage\"\
-              , \"prompt_tokens\", pt\n    )\n    handle:streamInfo():dynamicMetadata():set(\n\
+              content-length\", tostring(#patched))\n  end\nend\n\nlocal function\
+              \ scan_usage(raw, last_pt, last_ct)\n  for block in string.gmatch(raw,\
+              \ '\"usage\"%s*:%s*(%b{})') do\n    local p = tonumber(string.match(block,\
+              \ '\"prompt_tokens\"%s*:%s*(%d+)'))\n    local c = tonumber(string.match(block,\
+              \ '\"completion_tokens\"%s*:%s*(%d+)'))\n    if p or c then last_pt,\
+              \ last_ct = p or last_pt, c or last_ct end\n  end\n  return last_pt,\
+              \ last_ct\nend\n\nfunction envoy_on_response(handle)\n  local ct_hdr\
+              \ = (handle:headers():get(\"content-type\") or \"\"):lower()\n  local\
+              \ pt, ct_tok = 0, 0\n  if string.find(ct_hdr, \"text/event-stream\"\
+              , 1, true) then\n    -- Streaming: iterate chunks as they pass through\
+              \ \u2014 no full-body buffer.\n    -- A chunk may split a \"usage\"\
+              : {...} block across boundaries; we carry a\n    -- small tail (last\
+              \ 4KB) between chunks to absorb that case.\n    local carry = \"\"\n\
+              \    for chunk in handle:bodyChunks() do\n      local len = chunk:length()\n\
+              \      if len > 0 then\n        local raw = chunk:getBytes(0, len)\n\
+              \        local scanbuf = carry .. raw\n        pt, ct_tok = scan_usage(scanbuf,\
+              \ pt, ct_tok)\n        if #scanbuf > 4096 then\n          carry = string.sub(scanbuf,\
+              \ -4096)\n        else\n          carry = scanbuf\n        end\n   \
+              \   end\n    end\n  else\n    local body = handle:body()\n    if body\
+              \ then\n      local len = body:length()\n      if len > 0 then\n   \
+              \     pt, ct_tok = scan_usage(body:getBytes(0, len), 0, 0)\n      end\n\
+              \    end\n  end\n  if pt > 0 or ct_tok > 0 then\n    handle:streamInfo():dynamicMetadata():set(\n\
+              \      \"llmxy.usage\", \"prompt_tokens\", pt\n    )\n    handle:streamInfo():dynamicMetadata():set(\n\
               \      \"llmxy.usage\", \"completion_tokens\", ct_tok\n    )\n  end\n\
               end\n"
         - name: envoy.filters.http.router

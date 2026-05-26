@@ -48,11 +48,12 @@ def _hdr(headers: dict, name: str) -> str | None:
 
 
 def _check_token(context: grpc.aio.ServicerContext) -> bool:
-    expected = settings.XDS_AUTH_TOKEN
-    if not expected:
+    raw = settings.XDS_AUTH_TOKEN or ""
+    accepted = {t.strip() for t in raw.split(",") if t.strip()}
+    if not accepted:
         return True
     md = dict(context.invocation_metadata() or [])
-    return md.get(_TOKEN_METADATA_KEY) == expected
+    return md.get(_TOKEN_METADATA_KEY) in accepted
 
 
 async def _node_exists(node_id: str) -> bool:
@@ -67,18 +68,35 @@ def _extract_usage(entry) -> tuple[int, int]:
     """Read prompt/completion tokens from dynamic_metadata['llmxy.usage']."""
     try:
         fm = entry.common_properties.metadata.filter_metadata
-        log.info("ALS metadata keys=%s", list(fm.keys()))
         meta = fm.get("llmxy.usage")
         if not meta:
             return 0, 0
         fields = meta.fields
-        log.info("ALS llmxy.usage fields=%s", {k: v.number_value for k, v in fields.items()})
         pt = int(fields["prompt_tokens"].number_value) if "prompt_tokens" in fields else 0
         ct = int(fields["completion_tokens"].number_value) if "completion_tokens" in fields else 0
         return pt, ct
     except Exception as e:
         log.debug("usage extract failed: %s", e)
         return 0, 0
+
+
+async def _write_usage_log_only(
+    *, user_id: int, api_key_id: int | None, model_id: int | None,
+    user_facing_model: str | None, upstream_model: str | None,
+    prompt_tokens: int, completion_tokens: int, cost_cents: int,
+    latency_ms: int, status: str, request_id: str,
+) -> None:
+    """Fallback path: write a UsageLog row in its own transaction. Used when
+    the charge+log transaction rolled back so we still have an audit trail."""
+    async with AsyncSessionLocal() as db:
+        db.add(UsageLog(
+            user_id=user_id, api_key_id=api_key_id, model_id=model_id,
+            user_facing_model=user_facing_model, upstream_model=upstream_model,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            cost_cents=cost_cents, latency_ms=latency_ms,
+            status=status, request_id=request_id,
+        ))
+        await db.commit()
 
 
 async def _ingest_entry(entry) -> None:
@@ -89,9 +107,6 @@ async def _ingest_entry(entry) -> None:
     model_id = _hdr(headers, "x-llmxy-model-id")
     user_facing_model = _hdr(headers, "x-llmxy-user-facing-model")
     upstream_model = _hdr(headers, "x-llmxy-upstream-model")
-
-    log.info("ALS entry rid=%s user=%s key=%s model=%s headers_keys=%s",
-             request_id, user_id, api_key_id, model_id, list(headers.keys()))
 
     if not user_id or not model_id:
         # Likely a /v1/models listing or other non-billable call.
@@ -105,33 +120,56 @@ async def _ingest_entry(entry) -> None:
         duration_ms = int(d.seconds * 1000 + d.nanos / 1_000_000)
 
     prompt_tokens, completion_tokens = _extract_usage(entry)
+    if status_str == "ok" and prompt_tokens == 0 and completion_tokens == 0:
+        # Successful response with no usage metadata = Lua extract miss. Either
+        # the provider response body didn't carry `"usage": {...}` in OpenAI
+        # shape (translator regression), or the SSE final chunk was emitted on
+        # an unexpected content-type. Log so this is monitorable.
+        log.warning(
+            "ALS zero usage on 2xx rid=%s model=%s upstream=%s — check translator/Lua",
+            request_id, user_facing_model, upstream_model,
+        )
 
-    async with AsyncSessionLocal() as db:
-        m = await db.get(Model, int(model_id)) if model_id.isdigit() else None
-        cost = calc_cost_cents(m, prompt_tokens, completion_tokens) if m else 0
-        if cost > 0 and status_str == "ok":
-            from app.models import ApiKey, User
-            user = await db.get(User, int(user_id))
-            api_key = await db.get(ApiKey, int(api_key_id)) if (api_key_id and api_key_id.isdigit()) else None
-            if user:
-                try:
+    uid = int(user_id)
+    akid = int(api_key_id) if (api_key_id and api_key_id.isdigit()) else None
+    mid = int(model_id) if model_id.isdigit() else None
+
+    # Single transaction: charge + UsageLog row commit together, or roll back
+    # together. On rollback we still want an audit row, so we write a degraded
+    # UsageLog (status=error, cost=0) in a fresh session as a best-effort tail.
+    try:
+        async with AsyncSessionLocal() as db:
+            m = await db.get(Model, mid) if mid is not None else None
+            cost = calc_cost_cents(m, prompt_tokens, completion_tokens) if m else 0
+            if cost > 0 and status_str == "ok":
+                from app.models import ApiKey, User
+                user = await db.get(User, uid)
+                api_key = await db.get(ApiKey, akid) if akid is not None else None
+                if user:
                     await charge_user(db, user, api_key, cost, ref_id=request_id, note=user_facing_model)
-                except Exception as e:
-                    log.warning("charge_user failed rid=%s: %s", request_id, e)
-        db.add(UsageLog(
-            user_id=int(user_id),
-            api_key_id=int(api_key_id) if (api_key_id and api_key_id.isdigit()) else None,
-            model_id=int(model_id) if model_id.isdigit() else None,
-            user_facing_model=user_facing_model,
-            upstream_model=upstream_model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost_cents=cost,
-            latency_ms=duration_ms,
-            status=status_str,
-            request_id=request_id,
-        ))
-        await db.commit()
+            db.add(UsageLog(
+                user_id=uid, api_key_id=akid, model_id=mid,
+                user_facing_model=user_facing_model, upstream_model=upstream_model,
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                cost_cents=cost, latency_ms=duration_ms,
+                status=status_str, request_id=request_id,
+            ))
+            await db.commit()
+    except Exception as e:
+        log.warning(
+            "ALS billing+log tx rolled back rid=%s user=%s cost_attempt=? err=%s; writing degraded log",
+            request_id, uid, e,
+        )
+        try:
+            await _write_usage_log_only(
+                user_id=uid, api_key_id=akid, model_id=mid,
+                user_facing_model=user_facing_model, upstream_model=upstream_model,
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                cost_cents=0, latency_ms=duration_ms,
+                status="error", request_id=request_id,
+            )
+        except Exception as e2:
+            log.error("ALS degraded log write also failed rid=%s: %s", request_id, e2)
 
 
 async def _stream_handler(request_iterator, context):

@@ -51,15 +51,70 @@ _TOKEN_METADATA_KEY = "x-llmxy-token"
 _node_events: dict[str, asyncio.Event] = {}
 _node_loops: dict[str, asyncio.AbstractEventLoop] = {}
 
+# Redis pub/sub channel: multi-replica deployments use this to broadcast
+# notify_node() to every api process — only the one holding the live ADS
+# stream for that node_id will wake up (others no-op via empty _node_events).
+_NOTIFY_CHANNEL = "llmxy:xds:notify"
+_pubsub_task: asyncio.Task | None = None
 
-def notify_node(node_id: str) -> None:
-    """Wake the ADS stream serving `node_id` so it re-pushes config.
-    Safe to call from any thread / event loop."""
+
+def _local_notify(node_id: str) -> None:
     evt = _node_events.get(node_id)
     loop = _node_loops.get(node_id)
     if evt is None or loop is None:
         return
     loop.call_soon_threadsafe(evt.set)
+
+
+def notify_node(node_id: str) -> None:
+    """Wake the ADS stream serving `node_id` so it re-pushes config.
+    Locally signals this replica, and (if Redis is configured) publishes to
+    every other api replica so whichever one owns the stream wakes up too.
+    Safe to call from any thread / event loop.
+    """
+    _local_notify(node_id)
+    try:
+        from app.core.redis import get_redis
+        r = get_redis()
+        # Fire-and-forget. We don't await here because callers may be sync
+        # context (e.g. admin HTTP handler post-commit hook); the schedule
+        # happens on the current loop.
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(r.publish(_NOTIFY_CHANNEL, node_id))
+        except RuntimeError:
+            # No running loop (called from sync test) — skip broadcast.
+            pass
+    except Exception as e:
+        log.debug("xds notify_node: redis publish skipped: %s", e)
+
+
+async def _pubsub_listener() -> None:
+    """Subscribe to the notify channel and forward each message to local
+    streams. Runs forever; reconnects on transient redis errors."""
+    from app.core.redis import get_redis
+    backoff = 1.0
+    while True:
+        try:
+            r = get_redis()
+            ps = r.pubsub()
+            await ps.subscribe(_NOTIFY_CHANNEL)
+            log.info("xds pubsub subscribed to %s", _NOTIFY_CHANNEL)
+            backoff = 1.0
+            async for msg in ps.listen():
+                if msg is None or msg.get("type") != "message":
+                    continue
+                data = msg.get("data")
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8", errors="replace")
+                if isinstance(data, str) and data:
+                    _local_notify(data)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("xds pubsub listener error (retry in %ss): %s", backoff, e)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
 
 
 # --- resource rendering -----------------------------------------------------
@@ -146,14 +201,22 @@ async def _build_resources(node_id: str) -> dict[str, list[any_pb2.Any]]:
 
 # --- auth ------------------------------------------------------------------
 
+def _accepted_tokens() -> set[str]:
+    """Comma-separated XDS_AUTH_TOKEN supports rotation: deploy with both old
+    and new tokens listed, roll envoys onto the new one, then drop the old.
+    Empty string disables the check entirely (dev mode)."""
+    raw = settings.XDS_AUTH_TOKEN or ""
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
 def check_token(context: grpc.aio.ServicerContext) -> bool:
     """Return True if the gRPC metadata satisfies XDS_AUTH_TOKEN. An empty
     setting always returns True (dev-mode bypass)."""
-    expected = settings.XDS_AUTH_TOKEN
-    if not expected:
+    accepted = _accepted_tokens()
+    if not accepted:
         return True
     md = dict(context.invocation_metadata() or [])
-    return md.get(_TOKEN_METADATA_KEY) == expected
+    return md.get(_TOKEN_METADATA_KEY) in accepted
 
 
 async def _authn_node(node_id: str) -> EnvoyInstance | None:
@@ -264,7 +327,7 @@ _server: grpc.aio.Server | None = None
 
 
 async def start() -> None:
-    global _server
+    global _server, _pubsub_task
     if _server is not None:
         return
     server = grpc.aio.server()
@@ -273,12 +336,21 @@ async def start() -> None:
     server.add_insecure_port(bind)
     await server.start()
     _server = server
+    if _pubsub_task is None:
+        _pubsub_task = asyncio.create_task(_pubsub_listener())
     auth = "token-protected" if settings.XDS_AUTH_TOKEN else "OPEN (XDS_AUTH_TOKEN unset)"
     log.info("xDS ADS gRPC server listening on %s (%s)", bind, auth)
 
 
 async def stop() -> None:
-    global _server
+    global _server, _pubsub_task
+    if _pubsub_task is not None:
+        _pubsub_task.cancel()
+        try:
+            await _pubsub_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _pubsub_task = None
     if _server is None:
         return
     await _server.stop(grace=2.0)

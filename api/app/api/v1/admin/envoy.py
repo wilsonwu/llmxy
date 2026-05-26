@@ -73,6 +73,12 @@ async def create_instance(
 ):
     mode = EnvoyMode(req.mode)
     if mode == EnvoyMode.local:
+        if not settings.ENVOY_LOCAL_MODE_ENABLED:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "local-mode envoy is disabled (ENVOY_LOCAL_MODE_ENABLED=false). "
+                "Create a remote instance and deploy envoy externally instead.",
+            )
         if req.admin_port is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "admin_port required for local mode")
         if req.listen_port == req.admin_port:
@@ -169,8 +175,19 @@ async def delete_instance(
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     if inst.mode == EnvoyMode.local and inst.status == EnvoyStatus.running:
         raise HTTPException(status.HTTP_409_CONFLICT, "stop the instance before deleting")
+    # Capture local-mode paths before deleting the row so we can clean up
+    # rendered config + logs. Failures here shouldn't block deletion.
+    cfg_dir = inst.config_dir if inst.mode == EnvoyMode.local else None
+    log_dir = inst.log_dir if inst.mode == EnvoyMode.local else None
     await db.delete(inst)
     await db.commit()
+    for d in (cfg_dir, log_dir):
+        if not d:
+            continue
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
 
 
 @router.post("/instances/{inst_id}/start")
@@ -265,6 +282,31 @@ async def instance_stats(inst_id: int, _: User = Depends(require_admin), db: Asy
             if isinstance(v, (int, float)):
                 out[name] = int(v)
     return {"counters": out}
+
+
+@router.get("/instances/{inst_id}/metrics")
+async def instance_metrics(
+    inst_id: int,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Proxy envoy admin /stats/prometheus so a scraper can hit one URL per
+    instance through the control plane (avoids exposing envoy admin directly).
+    Returns text/plain in Prometheus exposition format."""
+    from fastapi.responses import PlainTextResponse
+    inst = await db.get(EnvoyInstance, inst_id)
+    if not inst:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    if not inst.admin_url:
+        raise HTTPException(status.HTTP_409_CONFLICT, "admin_url not set")
+    url = inst.admin_url.rstrip("/") + "/stats/prometheus"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"metrics fetch failed: {e}") from e
+    return PlainTextResponse(r.text, media_type="text/plain; version=0.0.4")
 
 
 @router.get("/instances/{inst_id}/logs")

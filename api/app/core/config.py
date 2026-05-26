@@ -69,6 +69,23 @@ class Settings(BaseSettings):
     # First reachable host for the control plane, written into the remote
     # bootstrap template returned to operators.
     CONTROL_PLANE_PUBLIC_HOST: str = "127.0.0.1"
+    # ext_authz max body buffer (bytes). Must be >= largest expected chat
+    # completion request body — anything larger gets rejected upstream.
+    ENVOY_EXT_AUTHZ_MAX_BYTES: int = 1024 * 1024  # 1 MiB
+    # ext_authz call timeout (seconds). Should comfortably exceed p99 of the
+    # internal /internal/relay/authz/* handler (DB lookup + balance check).
+    ENVOY_EXT_AUTHZ_TIMEOUT: str = "5s"
+    # Background health monitor: probe /ready on every active instance and
+    # update last_health_at. After this many consecutive failures, flip
+    # status=error and write last_error. 0 disables the monitor.
+    ENVOY_HEALTH_INTERVAL_SECONDS: int = 30
+    ENVOY_HEALTH_FAIL_THRESHOLD: int = 3
+    # Local-mode envoys are managed by a single python process (subprocess.Popen
+    # lives in memory). In multi-replica api deployments only one replica can
+    # own a given local instance; set this false to forbid local-mode entirely
+    # and require remote-mode envoys instead. Remote mode is multi-replica safe
+    # by design (xDS push is broadcast via redis pub/sub).
+    ENVOY_LOCAL_MODE_ENABLED: bool = True
 
     # Payments
     ALIPAY_APP_ID: str = ""

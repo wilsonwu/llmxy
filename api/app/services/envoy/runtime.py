@@ -35,6 +35,49 @@ def _bootstrap_path(inst: EnvoyInstance) -> str:
     return os.path.join(inst.config_dir, "bootstrap.yaml")
 
 
+def _pid_path(inst: EnvoyInstance) -> str:
+    return os.path.join(inst.config_dir, "envoy.pid")
+
+
+def _write_pid_file(inst: EnvoyInstance, pid: int) -> None:
+    try:
+        with open(_pid_path(inst), "w", encoding="utf-8") as f:
+            f.write(str(pid))
+    except Exception as e:
+        log.warning("envoy[%s] write pid file failed: %s", inst.name, e)
+
+
+def _read_pid_file(inst: EnvoyInstance) -> int | None:
+    try:
+        with open(_pid_path(inst), encoding="utf-8") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def _remove_pid_file(inst: EnvoyInstance) -> None:
+    try:
+        os.unlink(_pid_path(inst))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log.debug("envoy[%s] unlink pid file: %s", inst.name, e)
+
+
+async def _port_in_use(port: int) -> bool:
+    """Returns True if a TCP listener is already bound on port (any iface)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("0.0.0.0", port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
 def _log_path(inst: EnvoyInstance) -> str:
     os.makedirs(inst.log_dir, exist_ok=True)
     return os.path.join(inst.log_dir, "envoy.log")
@@ -74,6 +117,17 @@ async def _wait_ready(admin_port: int, timeout: float = 10.0) -> bool:
 async def start(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
     if inst.status == EnvoyStatus.running and _pid_alive(inst.pid):
         return {"status": "running", "pid": inst.pid}
+
+    # Refuse if something else already holds listen_port — otherwise envoy
+    # would crash with EADDRINUSE and we'd leave the DB in a weird half-state.
+    if await _port_in_use(inst.listen_port):
+        inst.status = EnvoyStatus.error
+        inst.last_error = f"listen_port {inst.listen_port} already in use"
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"port {inst.listen_port} is already in use by another process",
+        )
 
     # 1. (re)write config so we boot off fresh files.
     await envoy_config.write_all(db, inst)
@@ -116,6 +170,7 @@ async def start(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
 
     _procs[inst.id] = proc
     inst.pid = proc.pid
+    _write_pid_file(inst, proc.pid)
     await db.commit()
 
     ok = await _wait_ready(inst.admin_port, timeout=10.0)
@@ -140,7 +195,14 @@ async def start(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
 
 async def stop(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
     proc = _procs.get(inst.id)
-    pid = (proc.pid if proc else None) or inst.pid
+    # Pid resolution order: in-process Popen → DB column → pid file on disk.
+    # The last fallback catches orphans that survived an api restart with
+    # the DB column wiped out (e.g. previous botched stop).
+    pid = (
+        (proc.pid if proc else None)
+        or inst.pid
+        or (_read_pid_file(inst) if inst.config_dir else None)
+    )
 
     if proc is not None:
         try:
@@ -172,8 +234,19 @@ async def stop(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
         except Exception as e:
             log.warning("envoy[%s] os-kill error: %s", inst.name, e)
 
+    # Refuse to clear pid until we've actually observed the process die — that
+    # way a transient kill failure leaves the DB consistent for the next stop.
+    if pid and _pid_alive(pid):
+        inst.last_error = f"failed to terminate envoy pid={pid}"
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"envoy pid {pid} still alive after SIGKILL — manual intervention required",
+        )
+
     inst.status = EnvoyStatus.stopped
     inst.pid = None
+    _remove_pid_file(inst)
     await db.commit()
     return {"status": "stopped"}
 
@@ -265,3 +338,186 @@ async def tail_logs(inst: EnvoyInstance, n: int) -> list[str]:
     except Exception as e:
         log.warning("tail_logs failed: %s", e)
         return []
+
+
+async def adopt_orphans() -> None:
+    """On API startup, reconcile DB state with reality. For each local instance:
+    - status=running + pid alive + admin ready → adopt (restore pid).
+    - status=running but pid dead → reset to stopped.
+    - status=stopped but pid file shows a live process → kill it (orphan from
+      a previous botched stop). Without this, the prior envoy keeps serving
+      :listen_port while the UI says stopped.
+    Local-mode only; remote is owned by the operator.
+    """
+    from sqlalchemy import select
+    from app.db.session import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(EnvoyInstance).where(EnvoyInstance.mode == EnvoyMode.local)
+            )
+        ).scalars().all()
+        for inst in rows:
+            file_pid = _read_pid_file(inst) if inst.config_dir else None
+            pid = file_pid or inst.pid
+            alive = _pid_alive(pid)
+            ready = await health(inst) if alive and inst.admin_port else False
+
+            if inst.status == EnvoyStatus.stopped and alive:
+                log.warning(
+                    "envoy[%s] orphan detected (status=stopped, pid=%s alive) — killing",
+                    inst.name, pid,
+                )
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    for _ in range(20):
+                        if not _pid_alive(pid):
+                            break
+                        await asyncio.sleep(0.25)
+                    if _pid_alive(pid):
+                        os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception as e:
+                    log.warning("envoy[%s] orphan kill failed: %s", inst.name, e)
+                inst.pid = None
+                _remove_pid_file(inst)
+                continue
+
+            if alive and ready:
+                inst.pid = pid
+                inst.status = EnvoyStatus.running
+                inst.last_error = None
+                log.info("envoy[%s] adopted orphan pid=%d", inst.name, pid)
+            else:
+                if inst.status == EnvoyStatus.running:
+                    log.info(
+                        "envoy[%s] was marked running but pid=%s alive=%s ready=%s — resetting",
+                        inst.name, pid, alive, ready,
+                    )
+                inst.pid = None
+                inst.status = EnvoyStatus.stopped
+                if inst.config_dir:
+                    _remove_pid_file(inst)
+        await db.commit()
+
+
+_health_task: asyncio.Task | None = None
+_health_fail_count: dict[int, int] = {}
+
+# Lock key for multi-replica leader election (only one replica probes health).
+_HEALTH_LEADER_KEY = "llmxy:envoy:health-leader"
+_LEADER_ID = f"{os.getpid()}-{id(object())}"
+
+
+async def _acquire_leader_lock(ttl_seconds: int) -> bool:
+    """Best-effort leader election via Redis SET NX EX. Returns True if this
+    process is the leader for the next ttl_seconds. If Redis is unreachable,
+    fall back to always-leader (single-replica deployments work either way)."""
+    try:
+        from app.core.redis import get_redis
+        r = get_redis()
+        ok = await r.set(_HEALTH_LEADER_KEY, _LEADER_ID, nx=True, ex=ttl_seconds)
+        if ok:
+            return True
+        # Already held by us? Refresh.
+        cur = await r.get(_HEALTH_LEADER_KEY)
+        if cur == _LEADER_ID:
+            await r.expire(_HEALTH_LEADER_KEY, ttl_seconds)
+            return True
+        return False
+    except Exception:
+        return True
+
+
+async def _probe_one(inst: EnvoyInstance) -> bool:
+    """Probe an instance's admin /ready. Works for both local (loopback admin
+    port) and remote (operator-supplied admin_url)."""
+    if inst.mode == EnvoyMode.local:
+        if not inst.admin_port:
+            return False
+        url = f"http://127.0.0.1:{inst.admin_port}/ready"
+    else:
+        if not inst.admin_url:
+            return False
+        url = inst.admin_url.rstrip("/") + "/ready"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(url)
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+async def _health_loop() -> None:
+    from sqlalchemy import select
+    from app.db.session import AsyncSessionLocal
+
+    interval = max(5, settings.ENVOY_HEALTH_INTERVAL_SECONDS)
+    threshold = max(1, settings.ENVOY_HEALTH_FAIL_THRESHOLD)
+    log.info("envoy health monitor: interval=%ss threshold=%d", interval, threshold)
+    while True:
+        # Multi-replica guard: only one api process should probe at a time.
+        # Use a short-TTL redis lock; if we can't acquire it, sleep and try
+        # again on the next tick (some other replica is the leader).
+        acquired = await _acquire_leader_lock(interval * 2)
+        if not acquired:
+            await asyncio.sleep(interval)
+            continue
+        try:
+            async with AsyncSessionLocal() as db:
+                rows = (
+                    await db.execute(
+                        select(EnvoyInstance).where(
+                            EnvoyInstance.status.in_(
+                                (EnvoyStatus.running, EnvoyStatus.error)
+                            )
+                        )
+                    )
+                ).scalars().all()
+                changed = False
+                for inst in rows:
+                    ok = await _probe_one(inst)
+                    if ok:
+                        if _health_fail_count.pop(inst.id, 0):
+                            log.info("envoy[%s] recovered", inst.name)
+                        inst.last_health_at = datetime.now(timezone.utc)
+                        if inst.status == EnvoyStatus.error:
+                            inst.status = EnvoyStatus.running
+                            inst.last_error = None
+                            changed = True
+                    else:
+                        n = _health_fail_count.get(inst.id, 0) + 1
+                        _health_fail_count[inst.id] = n
+                        if n >= threshold and inst.status != EnvoyStatus.error:
+                            inst.status = EnvoyStatus.error
+                            inst.last_error = f"{n} consecutive health probe failures"
+                            log.warning("envoy[%s] marked error after %d failed probes", inst.name, n)
+                            changed = True
+                if changed:
+                    await db.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("envoy health loop tick failed: %s", e)
+        await asyncio.sleep(interval)
+
+
+async def start_health_monitor() -> None:
+    global _health_task
+    if _health_task is not None or settings.ENVOY_HEALTH_INTERVAL_SECONDS <= 0:
+        return
+    _health_task = asyncio.create_task(_health_loop())
+
+
+async def stop_health_monitor() -> None:
+    global _health_task
+    if _health_task is None:
+        return
+    _health_task.cancel()
+    try:
+        await _health_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    _health_task = None
