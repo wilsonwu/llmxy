@@ -66,10 +66,13 @@ async def _node_exists(node_id: str) -> bool:
 def _extract_usage(entry) -> tuple[int, int]:
     """Read prompt/completion tokens from dynamic_metadata['llmxy.usage']."""
     try:
-        meta = entry.common_properties.metadata.filter_metadata.get("llmxy.usage")
+        fm = entry.common_properties.metadata.filter_metadata
+        log.info("ALS metadata keys=%s", list(fm.keys()))
+        meta = fm.get("llmxy.usage")
         if not meta:
             return 0, 0
         fields = meta.fields
+        log.info("ALS llmxy.usage fields=%s", {k: v.number_value for k, v in fields.items()})
         pt = int(fields["prompt_tokens"].number_value) if "prompt_tokens" in fields else 0
         ct = int(fields["completion_tokens"].number_value) if "completion_tokens" in fields else 0
         return pt, ct
@@ -86,6 +89,9 @@ async def _ingest_entry(entry) -> None:
     model_id = _hdr(headers, "x-llmxy-model-id")
     user_facing_model = _hdr(headers, "x-llmxy-user-facing-model")
     upstream_model = _hdr(headers, "x-llmxy-upstream-model")
+
+    log.info("ALS entry rid=%s user=%s key=%s model=%s headers_keys=%s",
+             request_id, user_id, api_key_id, model_id, list(headers.keys()))
 
     if not user_id or not model_id:
         # Likely a /v1/models listing or other non-billable call.

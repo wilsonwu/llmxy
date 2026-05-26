@@ -27,17 +27,23 @@ from app.models import Channel, EnvoyInstance, EnvoyMode, EnvoyStatus
 
 log = logging.getLogger(__name__)
 
-# Inline Lua filter: ensures stream_options.include_usage and emits usage
-# from the final SSE chunk (or non-stream JSON body) into dynamic metadata.
+# Inline Lua filter: ensures stream_options.include_usage for streaming chat
+# requests, and emits prompt/completion tokens from the response body into
+# dynamic metadata (llmxy.usage) for the ALS sink to bill on.
+#
+# We do NOT rely on cjson — bundled envoy Lua doesn't ship it. Instead we use
+# string.match on the OpenAI-style `"usage": { ... }` block, which is stable
+# across openai / azure-openai / most compat backends.
 USAGE_LUA = r"""
-local cjson_ok, cjson = pcall(require, "cjson")
-local function parse_usage_from_json(s)
-  if not cjson_ok then return nil end
-  local ok, obj = pcall(cjson.decode, s)
-  if not ok or type(obj) ~= "table" then return nil end
-  local u = obj.usage
-  if type(u) ~= "table" then return nil end
-  return tonumber(u.prompt_tokens) or 0, tonumber(u.completion_tokens) or 0
+local function extract_usage(s)
+  if not s or #s == 0 then return 0, 0 end
+  -- Match "usage": { ... "prompt_tokens": N ... "completion_tokens": M ... }
+  -- Tokens may appear in either order, with arbitrary whitespace.
+  local block = string.match(s, '"usage"%s*:%s*(%b{})')
+  if not block then return 0, 0 end
+  local pt = tonumber(string.match(block, '"prompt_tokens"%s*:%s*(%d+)')) or 0
+  local ct = tonumber(string.match(block, '"completion_tokens"%s*:%s*(%d+)')) or 0
+  return pt, ct
 end
 
 function envoy_on_request(handle)
@@ -45,48 +51,57 @@ function envoy_on_request(handle)
   if not string.find(path, "/v1/chat/completions", 1, true) then return end
   local body = handle:body()
   if not body then return end
-  local raw = body:getBytes(0, body:length())
-  if not raw or #raw == 0 then return end
-  if not cjson_ok then return end
-  local ok, obj = pcall(cjson.decode, raw)
-  if not ok or type(obj) ~= "table" then return end
-  if obj.stream == true then
-    obj.stream_options = obj.stream_options or {}
-    obj.stream_options.include_usage = true
-    local out = cjson.encode(obj)
-    body:setBytes(out)
-    handle:headers():replace("content-length", tostring(#out))
+  local len = body:length()
+  if len == 0 then return end
+  local raw = body:getBytes(0, len)
+  -- Only patch streaming requests: ensure include_usage so the final SSE
+  -- chunk carries a usage block. Detection is by string match — avoids JSON
+  -- parsing in Lua and is safe because "stream":true is canonical.
+  if not string.find(raw, '"stream"%s*:%s*true') then return end
+  if string.find(raw, '"include_usage"%s*:%s*true') then return end
+  local patched
+  if string.find(raw, '"stream_options"') then
+    -- inject include_usage into existing stream_options object
+    patched = string.gsub(raw, '("stream_options"%s*:%s*{)',
+                          '%1"include_usage":true,', 1)
+  else
+    -- append a stream_options field before the closing brace
+    patched = string.gsub(raw, '}%s*$',
+                          ',"stream_options":{"include_usage":true}}', 1)
+  end
+  if patched and patched ~= raw then
+    body:setBytes(patched)
+    handle:headers():replace("content-length", tostring(#patched))
   end
 end
 
 function envoy_on_response(handle)
-  local ct = (handle:headers():get("content-type") or ""):lower()
+  local ct_hdr = (handle:headers():get("content-type") or ""):lower()
   local body = handle:body()
   if not body then return end
   local len = body:length()
   if len == 0 then return end
   local raw = body:getBytes(0, len)
   local pt, ct_tok = 0, 0
-  if string.find(ct, "text/event-stream", 1, true) then
-    -- scan for last `data: {...}` payload containing "usage"
-    local last_usage_payload = nil
-    for payload in string.gmatch(raw, "data:%s*({[^\n]+})") do
-      if string.find(payload, "\"usage\"", 1, true) then
-        last_usage_payload = payload
-      end
+  if string.find(ct_hdr, "text/event-stream", 1, true) then
+    -- For SSE, the usage block lives in the last `data:` frame that has it.
+    -- Search the whole concatenated body — the last match wins.
+    local last_pt, last_ct = 0, 0
+    for block in string.gmatch(raw, '"usage"%s*:%s*(%b{})') do
+      local p = tonumber(string.match(block, '"prompt_tokens"%s*:%s*(%d+)'))
+      local c = tonumber(string.match(block, '"completion_tokens"%s*:%s*(%d+)'))
+      if p or c then last_pt, last_ct = p or last_pt, c or last_ct end
     end
-    if last_usage_payload then
-      pt, ct_tok = parse_usage_from_json(last_usage_payload)
-    end
+    pt, ct_tok = last_pt, last_ct
   else
-    pt, ct_tok = parse_usage_from_json(raw)
+    pt, ct_tok = extract_usage(raw)
   end
-  if (pt or 0) > 0 or (ct_tok or 0) > 0 then
+  if pt > 0 or ct_tok > 0 then
     handle:streamInfo():dynamicMetadata():set(
-      "llmxy.usage", "prompt_tokens", pt or 0
+      "llmxy.usage", "prompt_tokens", pt
     )
     handle:streamInfo():dynamicMetadata():set(
-      "llmxy.usage", "completion_tokens", ct_tok or 0
+      "llmxy.usage", "completion_tokens", ct_tok
     )
   end
 end
@@ -294,7 +309,7 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
             },
         },
         "access_log": [{
-            "name": "envoy.access_loggers.open_telemetry",
+            "name": "envoy.access_loggers.http_grpc",
             "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.access_loggers.grpc.v3.HttpGrpcAccessLogConfig",
                 "common_config": {

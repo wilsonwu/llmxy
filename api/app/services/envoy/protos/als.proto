@@ -40,8 +40,9 @@ message Node {
 
 message HTTPAccessLogEntry {
   AccessLogCommon common_properties = 1;
-  HTTPRequestProperties request = 2;
-  HTTPResponseProperties response = 3;
+  // field 2 = HTTPVersion enum upstream — leave gap so wire type lines up.
+  HTTPRequestProperties request = 3;
+  HTTPResponseProperties response = 4;
 }
 
 // Only the handful of fields we care about. Unknown fields are dropped.
@@ -58,17 +59,17 @@ message Metadata {
 }
 
 message HTTPRequestProperties {
-  string path = 8;
-  // request_headers_bytes etc skipped; we read them via
-  // `additional_request_headers_to_log` which puts them at field 31.
-  map<string, string> request_headers = 31;
+  string path = 5;
+  // upstream: request_headers = 13 (map<string,string>). Envoy populates this
+  // from `additional_request_headers_to_log`.
+  map<string, string> request_headers = 13;
 }
 
 message HTTPResponseProperties {
   // envoy uses google.protobuf.UInt32Value here; for parsing we can use a
   // raw uint32 message — but protobuf doesn't auto-unwrap. Use a wrapper.
   UInt32Value response_code = 1;
-  map<string, string> response_headers = 5;
+  map<string, string> response_headers = 4;
 }
 
 message UInt32Value {
