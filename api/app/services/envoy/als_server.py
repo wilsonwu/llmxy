@@ -140,16 +140,26 @@ async def _ingest_entry(entry) -> None:
     # Single transaction: charge + UsageLog row commit together, or roll back
     # together. On rollback we still want an audit row, so we write a degraded
     # UsageLog (status=error, cost=0) in a fresh session as a best-effort tail.
+    structured_breakdown: list[tuple[str, int, int]] = []
+    window_start_epoch = 0
     try:
         async with AsyncSessionLocal() as db:
             m = await db.get(Model, mid) if mid is not None else None
             cost = calc_cost_cents(m, prompt_tokens, completion_tokens) if m else 0
             if cost > 0 and status_str == "ok":
-                from app.models import ApiKey, User
+                from app.models import ApiKey, QuotaMode, User
                 user = await db.get(User, uid)
                 api_key = await db.get(ApiKey, akid) if akid is not None else None
                 if user:
-                    await charge_user(db, user, api_key, cost, ref_id=request_id, note=user_facing_model)
+                    structured_breakdown = await charge_user(
+                        db, user, api_key, cost, ref_id=request_id, note=user_facing_model,
+                    )
+                    if api_key is not None:
+                        if (
+                            api_key.quota_mode == QuotaMode.periodic
+                            and api_key.quota_period_start is not None
+                        ):
+                            window_start_epoch = int(api_key.quota_period_start.timestamp())
             db.add(UsageLog(
                 user_id=uid, api_key_id=akid, model_id=mid,
                 user_facing_model=user_facing_model, upstream_model=upstream_model,
@@ -159,6 +169,19 @@ async def _ingest_entry(entry) -> None:
                 kind="relay", resolved_label=resolved_label,
             ))
             await db.commit()
+        # After PG commit succeeds, mirror counters to Redis so the next
+        # ext_authz read sees fresh numbers. Failure here is non-fatal —
+        # the cache will self-heal on the next hydrate.
+        if structured_breakdown:
+            try:
+                from app.services import quota_cache
+                await quota_cache.apply_charge(
+                    user_id=uid, key_id=akid, cost_cents=cost,
+                    window_start_epoch=window_start_epoch,
+                    breakdown=structured_breakdown,
+                )
+            except Exception as e:
+                log.warning("quota_cache mirror failed rid=%s: %s", request_id, e)
     except Exception as e:
         log.warning(
             "ALS billing+log tx rolled back rid=%s user=%s cost_attempt=? err=%s; writing degraded log",

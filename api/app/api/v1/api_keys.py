@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models import ApiKey, KeyStatus, QuotaMode, QuotaPeriod, User
 from app.schemas import ApiKeyCreate, ApiKeyCreated, ApiKeyOut, ApiKeyUpdate
 from app.services.api_key import init_periodic_window
+from app.services import api_key_cache
 
 router = APIRouter(prefix="/api-keys", tags=["api-keys"])
 
@@ -77,6 +78,7 @@ async def create_key(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    api_key_cache.update_apikey_snapshot(row)
     return ApiKeyCreated(**ApiKeyOut.model_validate(row).model_dump(), key=plain)
 
 
@@ -122,6 +124,15 @@ async def update_key(
 
     await db.commit()
     await db.refresh(row)
+    api_key_cache.update_apikey_snapshot(row)
+    await api_key_cache.invalidate_apikey(row.key_hash)
+    if mode_change or period_change:
+        # Old window's per-key used counter in Redis is now garbage; drop it.
+        try:
+            from app.services import quota_cache
+            await quota_cache.apply_window_roll(row.id, 0)
+        except Exception:
+            pass
     return row
 
 
@@ -134,8 +145,10 @@ async def delete_key(
     row = await db.get(ApiKey, key_id)
     if not row or row.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    key_hash = row.key_hash
     await db.delete(row)
     await db.commit()
+    await api_key_cache.invalidate_apikey(key_hash)
     return {"ok": True}
 
 
@@ -151,6 +164,8 @@ async def disable_key(
     row.status = KeyStatus.disabled
     await db.commit()
     await db.refresh(row)
+    api_key_cache.update_apikey_snapshot(row)
+    await api_key_cache.invalidate_apikey(row.key_hash)
     return row
 
 
@@ -178,4 +193,6 @@ async def enable_key(
     row.status = KeyStatus.active
     await db.commit()
     await db.refresh(row)
+    api_key_cache.update_apikey_snapshot(row)
+    await api_key_cache.invalidate_apikey(row.key_hash)
     return row

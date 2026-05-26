@@ -134,6 +134,7 @@ async def chat_completions(
                     kind="relay", resolved_label=resolved_label,
                 ))
                 await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
+                db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
                 await db.commit()
                 return
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")
@@ -161,6 +162,7 @@ async def chat_completions(
                 kind="relay", resolved_label=resolved_label,
             ))
             await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
+            db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
             await db.commit()
             return JSONResponse(result.body)
         last_err = result.body

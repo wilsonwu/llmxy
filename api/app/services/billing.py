@@ -92,16 +92,22 @@ async def charge_user(
     cost_cents: int,
     ref_id: str | None = None,
     note: str | None = None,
-) -> None:
+) -> list[tuple[str, int, int]]:
     """Deduct cost. Drains active subscriptions in end_at-ASC order first; any
     remainder falls back to wallet balance. Writes a single BalanceTx whose note
     encodes the breakdown, e.g. "gpt-4o [sub#3:-150;wallet:-50]".
+
+    Returns the structured breakdown `[(kind, ident, amount), ...]` where
+    kind is "sub" (ident=sub_id) or "wallet" (ident=0). Callers that
+    need to mirror to Redis pass this to `quota_cache.apply_charge`
+    AFTER their commit so PG remains the source of truth.
     """
     if cost_cents <= 0:
-        return
+        return []
 
     remaining = cost_cents
     breakdown: list[str] = []
+    structured: list[tuple[str, int, int]] = []
 
     subs = await active_subscriptions(db, user.id, lock=True)
     for sub in subs:
@@ -124,6 +130,7 @@ async def charge_user(
         _ = result.scalar_one()
         remaining -= take
         breakdown.append(f"sub#{sub.id}:-{take}")
+        structured.append(("sub", sub.id, take))
 
     wallet_after = user.balance_cents or 0
     if remaining > 0:
@@ -136,6 +143,7 @@ async def charge_user(
         wallet_after = result.scalar_one()
         user.balance_cents = wallet_after
         breakdown.append(f"wallet:-{remaining}")
+        structured.append(("wallet", 0, remaining))
 
     if api_key is not None:
         await db.execute(
@@ -160,6 +168,7 @@ async def charge_user(
         )
     )
     await db.flush()
+    return structured
 
 
 async def topup_wallet(
@@ -187,6 +196,7 @@ async def topup_wallet(
             note=note,
         )
     )
+    db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
     await db.flush()
 
 
@@ -227,6 +237,7 @@ async def grant_subscription(
             note=f"plan {plan.code} sub#{sub.id}",
         )
     )
+    db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
     await db.flush()
     return sub
 
@@ -308,4 +319,5 @@ async def renew_subscription(
     sub.status = "active"
     sub.last_renewal_at = now
     sub.last_renewal_error = None
+    db.info.setdefault("_quota_invalidate_uids", set()).add(sub.user_id)
     return True, "renewed"

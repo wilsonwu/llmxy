@@ -242,6 +242,16 @@ async def startup() -> None:
     except Exception as e:
         logging.warning("api_key expiry worker failed to start (continuing): %s", e)
 
+    # Cross-worker cache invalidation listener (snapshot caches in
+    # api_key_cache rely on this when multiple workers run).
+    try:
+        from app.core import cache_invalidate
+        # Importing api_key_cache registers its handlers as a side effect.
+        from app.services import api_key_cache  # noqa: F401
+        await cache_invalidate.start()
+    except Exception as e:
+        logging.warning("cache_invalidate listener failed to start (continuing): %s", e)
+
     # Report transport state so operators see at a glance whether envoy
     # is taking traffic or whether the api-direct path is the only one up.
     try:
@@ -295,6 +305,11 @@ async def shutdown() -> None:
     try:
         from app.services import api_key_expiry
         await api_key_expiry.stop()
+    except Exception:
+        pass
+    try:
+        from app.core import cache_invalidate
+        await cache_invalidate.stop()
     except Exception:
         pass
 # touch 1779786107

@@ -13,7 +13,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.db.session import AsyncSessionLocal
 from app.models import ApiKey, KeyStatus
@@ -27,6 +27,19 @@ _TICK_SECONDS = 5 * 60
 async def _scan_once() -> None:
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
+        # Collect the affected hashes first so we can invalidate caches
+        # after the bulk update (no per-row UPDATE round-trips).
+        hashes = (
+            await db.execute(
+                select(ApiKey.key_hash).where(
+                    ApiKey.status == KeyStatus.active,
+                    ApiKey.expires_at.is_not(None),
+                    ApiKey.expires_at <= now,
+                )
+            )
+        ).scalars().all()
+        if not hashes:
+            return
         result = await db.execute(
             update(ApiKey)
             .where(
@@ -39,6 +52,13 @@ async def _scan_once() -> None:
         await db.commit()
         if result.rowcount:
             log.info("api_key expiry sweep: flipped %s keys to expired", result.rowcount)
+    # Fan out invalidations to drop snapshot caches across workers.
+    from app.services import api_key_cache
+    for h in hashes:
+        try:
+            await api_key_cache.invalidate_apikey(h)
+        except Exception:
+            pass
 
 
 async def _loop() -> None:

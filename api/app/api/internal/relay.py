@@ -32,11 +32,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.crypto import decrypt
 from app.core.security import hash_api_key
 from app.db.session import AsyncSessionLocal
-from app.models import ApiKey, Channel, KeyStatus, Model, RoutePolicy, RouteScope, UsageLog, User, UserStatus
-from app.services import providers
-from app.services.billing import calc_cost_cents, charge_user, has_quota
+from app.models import Channel, KeyStatus, Model, RoutePolicy, RouteScope, UsageLog, UserStatus
+from app.services import api_key_cache, providers, quota_cache
+from app.services.billing import calc_cost_cents, charge_user
 from app.services.envoy.config import _channel_cluster_name, _is_direct
-from app.services.quota import rate_limit, user_rpm
+from app.services.quota import rate_limit
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/relay", tags=["internal"])
@@ -89,50 +89,56 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key format")
     key_hash = hash_api_key(plain)
 
+    # Snapshot lookup — zero PG hits on cache hit. enforce_key_state_cached
+    # opens a session only when status actually flips (expire/window-roll).
+    snap = await api_key_cache.get_apikey_snapshot(key_hash)
+    if snap is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key")
+    from app.services.api_key import enforce_key_state_cached
+    snap = await enforce_key_state_cached(snap)
+    if snap.status != KeyStatus.active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"api key {snap.status.value}")
+
+    user = await api_key_cache.get_user_snapshot(snap.user_id)
+    if user is None or user.status != UserStatus.active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user disabled")
+
+    # ----------------------------------------------------- quota / rate
+    window_start_epoch = quota_cache.window_start_epoch_for(snap)
+    ok, msg = await quota_cache.has_quota_fast(
+        snap.user_id, snap.id, snap.quota_cents, window_start_epoch,
+    )
+    if not ok:
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, msg)
+    if not await rate_limit(snap.user_id, per_min=user.plan_rpm):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "rate limit exceeded")
+
+    # ----------------------------------------------------- route lookup
+    # /v1/models is a passthrough listing — pick any direct cluster or
+    # fall back to translator. For now just deny — Envoy shouldn't route
+    # listing requests through here in practice (no usage anyway).
+    body = await request.body()
+    model_name = _extract_model_from_body(body, original_path)
+    if not model_name:
+        # Allow listing endpoints without a model — but we need *some*
+        # cluster. Pick translator (FastAPI handles /v1/models itself).
+        if original_path.endswith("/v1/models") or original_path.rstrip("/").endswith("/models"):
+            rid = request.headers.get("x-request-id") or f"req-{uuid.uuid4().hex[:16]}"
+            return Response(
+                status_code=200,
+                headers={
+                    "x-llmxy-cluster": "translator",
+                    "x-llmxy-request-id": rid,
+                    "x-llmxy-user-id": str(snap.user_id),
+                    "x-llmxy-api-key-id": str(snap.id),
+                },
+            )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model in body")
+
+    # Route resolution still hits PG (RoutePolicy/Model/Channel) — out of
+    # scope for this phase. Wrap in its own session so the snapshot path
+    # above isn't entangled with a transaction.
     async with AsyncSessionLocal() as db:
-        api_key = (
-            await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
-        ).scalar_one_or_none()
-        if not api_key:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key")
-        from app.services.api_key import enforce_key_state
-        await enforce_key_state(db, api_key)
-        if api_key.status != KeyStatus.active:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"api key {api_key.status.value}")
-        user = await db.get(User, api_key.user_id)
-        if not user or user.status != UserStatus.active:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user disabled")
-
-        # ----------------------------------------------------- quota / rate
-        ok, msg = await has_quota(db, user, api_key)
-        if not ok:
-            raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, msg)
-        rpm = await user_rpm(db, user.id)
-        if not await rate_limit(user.id, per_min=rpm):
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "rate limit exceeded")
-
-        # ----------------------------------------------------- route lookup
-        # /v1/models is a passthrough listing — pick any direct cluster or
-        # fall back to translator. For now just deny — Envoy shouldn't route
-        # listing requests through here in practice (no usage anyway).
-        body = await request.body()
-        model_name = _extract_model_from_body(body, original_path)
-        if not model_name:
-            # Allow listing endpoints without a model — but we need *some*
-            # cluster. Pick translator (FastAPI handles /v1/models itself).
-            if original_path.endswith("/v1/models") or original_path.rstrip("/").endswith("/models"):
-                rid = request.headers.get("x-request-id") or f"req-{uuid.uuid4().hex[:16]}"
-                return Response(
-                    status_code=200,
-                    headers={
-                        "x-llmxy-cluster": "translator",
-                        "x-llmxy-request-id": rid,
-                        "x-llmxy-user-id": str(user.id),
-                        "x-llmxy-api-key-id": str(api_key.id),
-                    },
-                )
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model in body")
-
         policy, models_by_id, channels_by_id = await _load_route(db, model_name)
         try:
             parsed_payload = json.loads(body) if body else None
@@ -156,9 +162,15 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
             try:
                 cls_cost = calc_cost_cents(cu.model, cu.prompt_tokens, cu.completion_tokens) if cu.status == "ok" else 0
                 if cls_cost > 0:
-                    await charge_user(db, user, api_key, cls_cost, ref_id=rid, note=f"{model_name} [classifier]")
+                    # Load ORM rows for charge_user (it mutates them).
+                    from app.models import ApiKey, User
+                    ak_row = await db.get(ApiKey, snap.id)
+                    user_row = await db.get(User, snap.user_id)
+                    if ak_row and user_row:
+                        await charge_user(db, user_row, ak_row, cls_cost, ref_id=rid, note=f"{model_name} [classifier]")
+                        db.info.setdefault("_quota_invalidate_uids", set()).add(snap.user_id)
                 db.add(UsageLog(
-                    user_id=user.id, api_key_id=api_key.id, model_id=cu.model.id,
+                    user_id=snap.user_id, api_key_id=snap.id, model_id=cu.model.id,
                     user_facing_model=model_name, upstream_model=cu.upstream_model,
                     prompt_tokens=cu.prompt_tokens, completion_tokens=cu.completion_tokens,
                     cost_cents=cls_cost, latency_ms=cu.latency_ms,
@@ -172,8 +184,8 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         headers: dict[str, str] = {
             "x-llmxy-cluster": cluster,
             "x-llmxy-request-id": rid,
-            "x-llmxy-user-id": str(user.id),
-            "x-llmxy-api-key-id": str(api_key.id),
+            "x-llmxy-user-id": str(snap.user_id),
+            "x-llmxy-api-key-id": str(snap.id),
             "x-llmxy-model-id": str(m.id),
             "x-llmxy-user-facing-model": model_name,
             "x-llmxy-upstream-model": m.upstream_model,

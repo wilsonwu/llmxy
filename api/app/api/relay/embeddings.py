@@ -61,5 +61,6 @@ async def embeddings(
         kind="relay", resolved_label=getattr(decision, "chosen_label", None),
     ))
     await _record_classifier_usage(db, user, api_key, decision, user_facing_model, request_id)
+    db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
     await db.commit()
     return JSONResponse(body)
