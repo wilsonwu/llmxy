@@ -30,7 +30,10 @@ async def seed() -> None:
         # demo plan
         plan = (await db.execute(select(Plan).where(Plan.code == "free"))).scalar_one_or_none()
         if not plan:
-            db.add(Plan(code="free", name="Free trial", price_cents=0, quota_cents=1_00, duration_days=30))
+            db.add(Plan(code="free", name="Free trial", plan_type="one_time", price_cents=0, quota_cents=1_00, duration_days=30))
+        elif plan.plan_type != "one_time":
+            # Coerce legacy seeded rows (default was recurring) to one-time.
+            plan.plan_type = "one_time"
 
         # demo channel
         ch = (await db.execute(select(Channel).where(Channel.name == "default-openai"))).scalar_one_or_none()

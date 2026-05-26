@@ -19,17 +19,18 @@ client certificates.
 2. **Create a remote instance** in the admin UI (Envoy → New instance →
    mode = remote, listen_port = the port your envoy will expose,
    admin_url = how the control plane will reach this envoy's admin API).
-3. **Copy the bootstrap** (Bootstrap button on the instance row). The
-   yaml is self-contained — it already has the right `node.id`, control
-   plane host, ports, and token.
+   Note the `node_id` shown on the resulting row — you'll paste it into
+   the deployment env vars below.
 
-Save the bootstrap as `bootstrap.yaml` next to one of the deployment
-templates below.
+No need to download a bootstrap.yaml — both deployment options here ship a
+template (`bootstrap.template.yaml`) and substitute the per-instance values
+at container start.
 
 ## Option A — Docker Compose
 
 ```sh
-# bootstrap.yaml sits next to docker-compose.yaml
+# 1. Edit the five LLMXY_* env vars in docker-compose.yaml (search "EDIT ME").
+# 2. Bring it up — bootstrap.template.yaml sits next to docker-compose.yaml.
 docker compose -f docker-compose.yaml up -d
 docker compose logs -f envoy
 ```
@@ -38,19 +39,24 @@ Envoy now serves on `localhost:9000`. The admin UI should show the instance
 turning green within a few seconds; the "last seen" column updates on each
 ALS heartbeat.
 
-## Option B — Kubernetes
+## Option B — Kubernetes (single-file apply)
+
+`kubernetes.yaml` is self-contained: standard ConfigMap + Deployment + Service,
+no operators, CRDs, Helm or kustomize. The ConfigMap embeds the same bootstrap
+template; the per-instance values are passed as env vars and substituted at
+container start.
 
 ```sh
-kubectl create configmap llmxy-envoy --from-file=bootstrap.yaml \
-    --dry-run=client -o yaml | kubectl apply -f -
-
-kubectl apply -k kubernetes/
+# 1. Edit the five LLMXY_* env vars at the top of the Deployment in
+#    kubernetes.yaml (search for "EDIT ME").
+# 2. Apply.
+kubectl apply -f kubernetes.yaml
 kubectl rollout status deploy/llmxy-envoy
 ```
 
-`Service` is `LoadBalancer` by default; switch to `ClusterIP` / `NodePort`
-per your environment. Scale by editing `Deployment.spec.replicas` — every
-replica uses the same bootstrap.yaml and talks to the same control plane.
+`Service` defaults to `LoadBalancer`; switch to `ClusterIP` / `NodePort` per
+your environment. Scale by editing `Deployment.spec.replicas` — every replica
+shares the same bootstrap and connects to the same control plane node row.
 
 ## Verifying End-to-End
 
@@ -63,10 +69,10 @@ replica uses the same bootstrap.yaml and talks to the same control plane.
 
 ## Rotating the Token
 
-Update `XDS_AUTH_TOKEN` in the control plane env and restart it. Re-copy
-the bootstrap from the admin UI (it embeds the new token), redeploy envoy.
-Until that's done, the old token will get `UNAUTHENTICATED` on every
-reconnect.
+Set `XDS_AUTH_TOKEN=oldtoken,newtoken` on the control plane and restart it —
+both are accepted concurrently. Update `LLMXY_TOKEN` in your envoy deployment
+(docker-compose `environment:` or k8s Deployment env) and redeploy. Once all
+envoys carry the new token, drop the old one from the control plane env.
 
 ## Troubleshooting
 

@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: llmxy-envoy
-  namespace: default
-# Populate from the bootstrap.yaml you copied from the control plane UI:
-#   kubectl create configmap llmxy-envoy --from-file=bootstrap.yaml \
-#     --dry-run=client -o yaml | kubectl apply -f -
-data: {}

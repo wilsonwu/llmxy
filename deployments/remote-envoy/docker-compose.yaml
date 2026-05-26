@@ -1,20 +1,36 @@
-version: "3.9"
-
-# Save the bootstrap.yaml from the control plane (Envoy → instance → Bootstrap
-# → Copy) next to this file. Listener published on 9000; admin on 9901.
+# llmxy remote envoy — docker-compose deployment.
+#
+# Uses the same env-var + sed substitution flow as kubernetes.yaml so the only
+# things you edit are the five LLMXY_* values below. No need to hand-write or
+# copy a bootstrap.yaml — bootstrap.template.yaml ships next to this file and
+# is rendered at container start.
 services:
   envoy:
     image: envoyproxy/envoy:v1.31-latest
     container_name: llmxy-envoy
     restart: unless-stopped
+    environment:
+      # ---------- EDIT ME ----------
+      LLMXY_NODE_ID: "llmxy-remote-CHANGEME"     # from admin UI instance row
+      LLMXY_TOKEN: "CHANGEME"                    # control plane XDS_AUTH_TOKEN
+      LLMXY_CONTROL_PLANE_HOST: "host.docker.internal"  # reachable from the container
+      LLMXY_XDS_PORT: "8003"
+      LLMXY_ALS_PORT: "8002"
+      # -----------------------------
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - envoy
-      - -c
-      - /etc/envoy/bootstrap.yaml
-      - --log-level
-      - info
+      - |
+        set -eu
+        sed \
+          -e "s|__LLMXY_NODE_ID__|$${LLMXY_NODE_ID}|g" \
+          -e "s|__LLMXY_TOKEN__|$${LLMXY_TOKEN}|g" \
+          -e "s|__LLMXY_CONTROL_PLANE_HOST__|$${LLMXY_CONTROL_PLANE_HOST}|g" \
+          -e "s|__LLMXY_XDS_PORT__|$${LLMXY_XDS_PORT}|g" \
+          -e "s|__LLMXY_ALS_PORT__|$${LLMXY_ALS_PORT}|g" \
+          /etc/envoy-template/bootstrap.template.yaml > /tmp/bootstrap.yaml
+        exec envoy -c /tmp/bootstrap.yaml --log-level info
     volumes:
-      - ./bootstrap.yaml:/etc/envoy/bootstrap.yaml:ro
+      - ./bootstrap.template.yaml:/etc/envoy-template/bootstrap.template.yaml:ro
     ports:
       - "9000:9000"   # client traffic (matches listen_port from the control plane)
       - "9901:9901"   # envoy admin (do NOT expose publicly in prod)
