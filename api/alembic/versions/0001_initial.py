@@ -210,16 +210,20 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_balance_tx_user_created", table_name="balance_tx")
-    op.drop_index("ix_usage_logs_created", table_name="usage_logs")
-    op.drop_index("ix_usage_logs_user_created", table_name="usage_logs")
-    op.drop_index("ix_envoy_instances_node_id", table_name="envoy_instances")
-    op.drop_index("ix_envoy_instances_name", table_name="envoy_instances")
+    # Use IF EXISTS so a partial / older schema can still be torn down cleanly.
+    for idx in [
+        "ix_balance_tx_user_created",
+        "ix_usage_logs_created",
+        "ix_usage_logs_user_created",
+        "ix_envoy_instances_node_id",
+        "ix_envoy_instances_name",
+    ]:
+        op.execute(f"DROP INDEX IF EXISTS {idx}")
     for t in [
         "envoy_instances", "balance_tx", "usage_logs", "route_policies",
         "models", "channels", "orders", "subscriptions", "plans",
         "api_keys", "users",
     ]:
-        op.drop_table(t)
+        op.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
     for e in ["balancetxtype", "routescope", "routestrategy", "orderstatus", "paymentchannel", "keystatus", "userstatus", "userrole"]:
         op.execute(f"DROP TYPE IF EXISTS {e}")
