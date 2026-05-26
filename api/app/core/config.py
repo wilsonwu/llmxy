@@ -56,9 +56,19 @@ class Settings(BaseSettings):
     ENVOY_LOG_ROOT: str = "./var/envoy-logs"
     # Internal API base envoy ext_authz / translator calls; must be reachable from envoy
     INTERNAL_API_HOST: str = "127.0.0.1"
-    INTERNAL_API_PORT: int = 8001
+    INTERNAL_API_PORT: int = 8000
     # gRPC ALS server (envoy AccessLogService client)
     ALS_GRPC_PORT: int = 8002
+    # ===== Remote envoy (gRPC ADS, plaintext + shared token) =====
+    # xDS ADS gRPC server. Public-reachable for remote envoy nodes.
+    XDS_GRPC_PORT: int = 8003
+    # Shared static token. Remote envoy bootstrap puts this in gRPC metadata
+    # as `x-llmxy-token` for both ADS and ALS streams. Empty disables the check
+    # (dev only — node_id matching still applies).
+    XDS_AUTH_TOKEN: str = ""
+    # First reachable host for the control plane, written into the remote
+    # bootstrap template returned to operators.
+    CONTROL_PLANE_PUBLIC_HOST: str = "127.0.0.1"
 
     # Payments
     ALIPAY_APP_ID: str = ""

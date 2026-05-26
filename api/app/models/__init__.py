@@ -75,6 +75,11 @@ class EnvoyStatus(str, enum.Enum):
     error = "error"
 
 
+class EnvoyMode(str, enum.Enum):
+    local = "local"
+    remote = "remote"
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -227,18 +232,34 @@ class BalanceTx(Base):
 
 
 class EnvoyInstance(Base):
-    """A single envoy process managed by the api. One row per envoy daemon."""
+    """A single envoy daemon — either locally managed (subprocess) or remote (gRPC ADS)."""
     __tablename__ = "envoy_instances"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    mode: Mapped[EnvoyMode] = mapped_column(
+        SAEnum(EnvoyMode, native_enum=False, length=16),
+        default=EnvoyMode.local,
+        nullable=False,
+        server_default="local",
+    )
+    # node_id reported by envoy in xDS/ALS — must match a row here for the
+    # stream to be accepted.
+    node_id: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
     listen_port: Mapped[int] = mapped_column(Integer, unique=True)
-    admin_port: Mapped[int] = mapped_column(Integer, unique=True)
+    # admin_port: local mode binds envoy admin here. NULL for remote.
+    admin_port: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
+    # admin_url: how the control plane reaches envoy's admin API for stats /
+    # readiness probes. Local: auto-derived `http://127.0.0.1:{admin_port}`.
+    # Remote: supplied by the operator at create time.
+    admin_url: Mapped[Optional[str]] = mapped_column(String(512))
     status: Mapped[EnvoyStatus] = mapped_column(SAEnum(EnvoyStatus, native_enum=False, length=16), default=EnvoyStatus.stopped, nullable=False)
     pid: Mapped[Optional[int]] = mapped_column(Integer)
     config_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    config_dir: Mapped[str] = mapped_column(String(512))
-    log_dir: Mapped[str] = mapped_column(String(512))
+    config_dir: Mapped[Optional[str]] = mapped_column(String(512))
+    log_dir: Mapped[Optional[str]] = mapped_column(String(512))
     last_health_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[Optional[str]] = mapped_column(Text)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_xds_version: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

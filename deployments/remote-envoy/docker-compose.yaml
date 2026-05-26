@@ -1,0 +1,26 @@
+version: "3.9"
+
+# Save the bootstrap.yaml from the control plane (Envoy → instance → Bootstrap
+# → Copy) next to this file. Listener published on 9000; admin on 9901.
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    container_name: llmxy-envoy
+    restart: unless-stopped
+    command:
+      - envoy
+      - -c
+      - /etc/envoy/bootstrap.yaml
+      - --log-level
+      - info
+    volumes:
+      - ./bootstrap.yaml:/etc/envoy/bootstrap.yaml:ro
+    ports:
+      - "9000:9000"   # client traffic (matches listen_port from the control plane)
+      - "9901:9901"   # envoy admin (do NOT expose publicly in prod)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9901/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s

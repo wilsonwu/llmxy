@@ -46,6 +46,12 @@ services:
       # range of envoy listener ports the api can spawn (admin chooses
       # specific ports per instance, must fall within this range)
       - "9000-9099:9000-9099"
+      # Remote-envoy control plane: plaintext gRPC ADS (8003) + ALS (8002).
+      # Required only if you intend to attach remote envoy nodes. Authenticated
+      # by shared static token (XDS_AUTH_TOKEN) + node_id — front with a TLS
+      # reverse proxy if you need wire encryption.
+      - "${XDS_GRPC_PORT:-8003}:8003"
+      - "${ALS_GRPC_PORT:-8002}:8002"
     volumes:
       - envoy_cfg:/var/llmxy/envoy
       - envoy_logs:/var/llmxy/envoy-logs

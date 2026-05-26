@@ -249,24 +249,45 @@ class UserDetailOut(BaseModel):
 # -------- Envoy instances --------
 class EnvoyInstanceIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
+    mode: str = Field(default="local", pattern="^(local|remote)$")
     listen_port: int = Field(ge=1024, le=65535)
-    admin_port: int = Field(ge=1024, le=65535)
+    # admin_port is required for local mode and ignored for remote.
+    admin_port: Optional[int] = Field(default=None, ge=1024, le=65535)
+    # admin_url: required for remote (operator-supplied — how the control
+    # plane reaches envoy's admin API). For local mode it's auto-derived.
+    admin_url: Optional[str] = Field(default=None, max_length=512)
 
 
 class EnvoyInstanceOut(BaseModel):
     id: int
     name: str
+    mode: str
+    node_id: str
     listen_port: int
-    admin_port: int
+    admin_port: Optional[int] = None
+    admin_url: Optional[str] = None
     status: str
     pid: Optional[int] = None
     config_version: int
-    config_dir: str
-    log_dir: str
+    config_dir: Optional[str] = None
+    log_dir: Optional[str] = None
     last_health_at: Optional[datetime] = None
     last_error: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
+    last_xds_version: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class EnvoyConnectionOut(BaseModel):
+    node_id: str
+    ads_connected: bool
+    last_seen_at: Optional[datetime] = None
+    last_xds_version: Optional[str] = None
+
+
+class EnvoyBootstrapOut(BaseModel):
+    yaml: str

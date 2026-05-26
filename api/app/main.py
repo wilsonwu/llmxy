@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import sys
+import time
 import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.internal import relay as internal_relay
 from app.api.internal import translate as internal_translate
@@ -24,34 +25,110 @@ from app.core.config import settings
 from app.core.request_ctx import request_id_var
 
 
-class _RequestIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
+# ---------------------------------------------------------------------------
+# Logging: colorized level + access log with method/status colors. ANSI codes
+# only emitted when stderr is a TTY (so file/journalctl output stays clean).
+# ---------------------------------------------------------------------------
+_USE_COLOR = sys.stderr.isatty()
+
+
+def _c(code: str, s: str) -> str:
+    return f"\033[{code}m{s}\033[0m" if _USE_COLOR else s
+
+
+_LEVEL_COLOR = {
+    "DEBUG": "36",   # cyan
+    "INFO": "32",    # green
+    "WARNING": "33", # yellow
+    "ERROR": "31",   # red
+    "CRITICAL": "1;31",
+}
+_METHOD_COLOR = {
+    "GET": "36", "HEAD": "36",
+    "POST": "32", "PUT": "33", "PATCH": "33",
+    "DELETE": "31", "OPTIONS": "35",
+}
+
+
+def _status_color(status: int) -> str:
+    if status < 300:
+        return "32"
+    if status < 400:
+        return "36"
+    if status < 500:
+        return "33"
+    return "31"
+
+
+class _ColorFormatter(logging.Formatter):
+    default_time_format = "%H:%M:%S"
+    default_msec_format = "%s.%03d"
+
+    def format(self, record: logging.LogRecord) -> str:
         record.request_id = request_id_var.get() or "-"
-        return True
+        ts = self.formatTime(record, self.default_time_format)
+        rid = _c("90", f"[{record.request_id}]")
+        level = _c(_LEVEL_COLOR.get(record.levelname, "0"), f"{record.levelname:<5}")
+
+        if record.name == "access":
+            method = getattr(record, "method", "-")
+            path = getattr(record, "path", "-")
+            status = int(getattr(record, "status", 0))
+            dur_ms = float(getattr(record, "dur_ms", 0.0))
+            client = getattr(record, "client", "-")
+            m = _c(_METHOD_COLOR.get(method, "0"), f"{method:<6}")
+            st = _c(_status_color(status) + ";1", str(status))
+            dur = _c("90", f"{dur_ms:7.1f}ms")
+            return f"{ts} {level} {rid} {client:<15} {m} {path} {st} {dur}"
+
+        name = _c("90", f"{record.name}")
+        return f"{ts} {level} {rid} {name}: {record.getMessage()}"
 
 
 _handler = logging.StreamHandler()
-_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] [rid=%(request_id)s] %(message)s"))
-_handler.addFilter(_RequestIdFilter())
+_handler.setFormatter(_ColorFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
+for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    _lg = logging.getLogger(_name)
+    _lg.handlers = [_handler]
+    _lg.setLevel(logging.INFO)
+    _lg.propagate = False
+# Silence uvicorn's built-in access log — our middleware emits a richer one.
+logging.getLogger("uvicorn.access").disabled = True
 
 
 app = FastAPI(title="llmxy api", version="0.1.0")
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
-        token = request_id_var.set(rid)
-        try:
-            response = await call_next(request)
-        finally:
-            request_id_var.reset(token)
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
+    token = request_id_var.set(rid)
+    start = time.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
         response.headers["X-Request-ID"] = rid
         return response
+    finally:
+        dur_ms = (time.perf_counter() - start) * 1000
+        path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        try:
+            logging.getLogger("access").info(
+                "",
+                extra={
+                    "method": request.method,
+                    "path": path,
+                    "status": status,
+                    "dur_ms": dur_ms,
+                    "client": request.client.host if request.client else "-",
+                },
+            )
+        except Exception:
+            pass
+        request_id_var.reset(token)
 
-
-app.add_middleware(RequestIdMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -126,11 +203,19 @@ async def startup() -> None:
         logging.warning("seed failed (continuing): %s", e)
 
     # Start ALS gRPC server for envoy access logs (usage + billing ingest).
+    # Single plaintext listener serves both local and remote envoys.
     try:
         from app.services.envoy import als_server
         await als_server.start()
     except Exception as e:
         logging.warning("ALS server failed to start (continuing): %s", e)
+
+    # xDS ADS server for remote envoys (plaintext + shared token auth).
+    try:
+        from app.services.envoy import xds_server
+        await xds_server.start()
+    except Exception as e:
+        logging.warning("xDS server failed to start (continuing): %s", e)
 
     # Subscription renewal worker (auto-charge wallet on period boundary).
     try:
@@ -169,6 +254,11 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    try:
+        from app.services.envoy import xds_server
+        await xds_server.stop()
+    except Exception:
+        pass
     try:
         from app.services.envoy import als_server
         await als_server.stop()

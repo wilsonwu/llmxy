@@ -16,9 +16,9 @@ resources:
           route_config_name: llmxy_routes
           config_source:
             path_config_source:
-              path: D:\WilsonWuData\mycode\llmxy\api\var\envoy\ins1\rds.yaml
+              path: /Users/wilsonwu/wilsonwudata/mycode/llmxy/api/var/envoy/ins1/rds.yaml
               watched_directory:
-                path: D:\WilsonWuData\mycode\llmxy\api\var\envoy\ins1
+                path: /Users/wilsonwu/wilsonwudata/mycode/llmxy/api/var/envoy/ins1
             resource_api_version: V3
         access_log:
         - name: envoy.access_loggers.open_telemetry
@@ -46,7 +46,7 @@ resources:
             transport_api_version: V3
             http_service:
               server_uri:
-                uri: http://127.0.0.1:8001
+                uri: http://127.0.0.1:8000
                 cluster: ext_authz
                 timeout: 5s
               path_prefix: /internal/relay/authz
@@ -68,6 +68,7 @@ resources:
               allow_partial_message: false
               pack_as_bytes: true
             failure_mode_allow: false
+            clear_route_cache: true
         - name: envoy.filters.http.lua
           typed_config:
             '@type': type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua

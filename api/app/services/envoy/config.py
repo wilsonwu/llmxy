@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import Channel, EnvoyInstance, EnvoyStatus
+from app.models import Channel, EnvoyInstance, EnvoyMode, EnvoyStatus
 
 log = logging.getLogger(__name__)
 
@@ -349,6 +349,7 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                         "pack_as_bytes": True,
                     },
                     "failure_mode_allow": False,
+                    "clear_route_cache": True,
                 },
             },
             {
@@ -445,11 +446,20 @@ async def regenerate(db: AsyncSession, inst: EnvoyInstance) -> int:
 
 
 async def regenerate_all_running(db: AsyncSession) -> int:
-    rows = (
-        await db.execute(select(EnvoyInstance).where(EnvoyInstance.status == EnvoyStatus.running))
-    ).scalars().all()
+    """Refresh config for every active envoy: rewrite YAML for local instances
+    that are running, and ping the xDS server for remote nodes (regardless of
+    connection state — they'll pick it up next stream open)."""
+    rows = (await db.execute(select(EnvoyInstance))).scalars().all()
     n = 0
+    dirty_remote: list[str] = []
     for inst in rows:
+        if inst.mode == EnvoyMode.remote:
+            inst.config_version = (inst.config_version or 0) + 1
+            dirty_remote.append(inst.node_id)
+            n += 1
+            continue
+        if inst.status != EnvoyStatus.running:
+            continue
         try:
             await write_all(db, inst)
             n += 1
@@ -457,4 +467,11 @@ async def regenerate_all_running(db: AsyncSession) -> int:
             log.warning("regen failed for envoy[%s]: %s", inst.name, e)
     if n:
         await db.commit()
+    if dirty_remote:
+        try:
+            from app.services.envoy import xds_server
+            for nid in dirty_remote:
+                xds_server.notify_node(nid)
+        except Exception as e:
+            log.debug("xds notify skipped: %s", e)
     return n

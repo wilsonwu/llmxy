@@ -12,7 +12,7 @@ resources:
           address:
             socket_address:
               address: 127.0.0.1
-              port_value: 8001
+              port_value: 8000
 - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
   name: ext_authz
   type: STRICT_DNS
@@ -26,7 +26,7 @@ resources:
           address:
             socket_address:
               address: 127.0.0.1
-              port_value: 8001
+              port_value: 8000
 - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
   name: als
   type: STRICT_DNS

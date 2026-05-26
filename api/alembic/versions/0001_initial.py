@@ -154,26 +154,34 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
 
-    # envoy_instances: status stored as plain VARCHAR (not PG ENUM) because
+    # envoy_instances: status / mode stored as plain VARCHAR (not PG ENUM) because
     # asyncpg's ENUM creation interacts badly with repeated migration attempts
     # and the Python-side enum (str-based) round-trips cleanly through text.
+    # `admin_port` / `config_dir` / `log_dir` are nullable so remote-mode
+    # instances (managed via gRPC ADS) don't need to allocate them.
     op.create_table(
         "envoy_instances",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("name", sa.String(64), nullable=False, unique=True),
+        sa.Column("mode", sa.String(16), nullable=False, server_default="local"),
+        sa.Column("node_id", sa.String(128), nullable=False),
         sa.Column("listen_port", sa.Integer(), nullable=False, unique=True),
-        sa.Column("admin_port", sa.Integer(), nullable=False, unique=True),
+        sa.Column("admin_port", sa.Integer(), nullable=True, unique=True),
+        sa.Column("admin_url", sa.String(512), nullable=True),
         sa.Column("status", sa.String(16), nullable=False, server_default="stopped"),
         sa.Column("pid", sa.Integer(), nullable=True),
         sa.Column("config_version", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("config_dir", sa.String(512), nullable=False),
-        sa.Column("log_dir", sa.String(512), nullable=False),
+        sa.Column("config_dir", sa.String(512), nullable=True),
+        sa.Column("log_dir", sa.String(512), nullable=True),
         sa.Column("last_health_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_xds_version", sa.String(64), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
     )
     op.create_index("ix_envoy_instances_name", "envoy_instances", ["name"], unique=True)
+    op.create_index("ix_envoy_instances_node_id", "envoy_instances", ["node_id"], unique=True)
 
     # hot-path indexes
     op.create_index(
@@ -190,6 +198,7 @@ def downgrade() -> None:
     op.drop_index("ix_balance_tx_user_created", table_name="balance_tx")
     op.drop_index("ix_usage_logs_created", table_name="usage_logs")
     op.drop_index("ix_usage_logs_user_created", table_name="usage_logs")
+    op.drop_index("ix_envoy_instances_node_id", table_name="envoy_instances")
     op.drop_index("ix_envoy_instances_name", table_name="envoy_instances")
     for t in [
         "envoy_instances", "balance_tx", "usage_logs", "route_policies",

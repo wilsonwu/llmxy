@@ -21,7 +21,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import EnvoyInstance, EnvoyStatus
+from app.models import EnvoyInstance, EnvoyMode, EnvoyStatus
 from app.services.envoy import config as envoy_config
 
 log = logging.getLogger(__name__)
@@ -184,8 +184,19 @@ async def restart(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
 
 
 async def reload(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
-    """File-based dynamic config — just rewrite files and Envoy's
-    watched_directory picks it up. No signal needed."""
+    """Reload config.
+
+    - local: rewrite YAML files; Envoy's watched_directory picks them up.
+    - remote: bump config_version, then nudge the ADS server to re-push to
+      the live stream for this node. If the remote envoy isn't connected
+      we still bump the version so the next stream open delivers the change.
+    """
+    if inst.mode == EnvoyMode.remote:
+        from app.services.envoy import xds_server
+        inst.config_version = (inst.config_version or 0) + 1
+        await db.commit()
+        xds_server.notify_node(inst.node_id)
+        return {"status": "pushed", "config_version": inst.config_version}
     if inst.status != EnvoyStatus.running:
         raise HTTPException(status.HTTP_409_CONFLICT, "instance not running")
     version = await envoy_config.write_all(db, inst)

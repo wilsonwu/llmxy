@@ -24,6 +24,7 @@ dependencies = [
   "grpcio>=1.62",
   "grpcio-tools>=1.62",
   "protobuf>=4.25",
+  "xds-protos>=0.0.11",
 ]
 
 [project.optional-dependencies]
