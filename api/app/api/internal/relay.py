@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import decrypt
+from app.core.request_ctx import client_ip
 from app.core.security import hash_api_key
 from app.db.session import AsyncSessionLocal
 from app.models import Channel, KeyStatus, Model, RoutePolicy, RouteScope, UserStatus
@@ -145,7 +146,8 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
             parsed_payload = None
         prompt_text = providers.extract_prompt_text(parsed_payload) if parsed_payload else ""
         decision = await providers.select_route(
-            policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+            policy, models_by_id, channels_by_id,
+            prompt_text=prompt_text, client_ip=client_ip(request), db=db,
         )
         if not decision:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no available upstream")

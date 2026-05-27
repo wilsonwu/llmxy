@@ -2,13 +2,15 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
+import { COUNTRIES, COUNTRY_NAME } from "@/lib/countries";
 
 type Target = { model_id: number; weight: number; fallback_order: number; label?: string | null };
 type Rule =
   | { type: "preset"; id: string; label: string }
   | { type: "tokens"; threshold: number; gt_label: string; lte_label: string }
   | { type: "keyword"; pattern: string; label: string }
-  | { type: "code_block"; label: string };
+  | { type: "code_block"; label: string }
+  | { type: "geo"; countries: string[]; label: string };
 type Exemplar = { label: string; text: string };
 type R = {
   id?: number;
@@ -50,7 +52,7 @@ const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
   smart: {
     title: "smart — pick by prompt content",
     body:
-      "Rule matching (zero-code, built-in presets) runs first; on a miss, an optional embedding classifier compares the prompt to each label's exemplar texts via vector similarity; if still unmatched, falls back to the default label.",
+      "Pick one deciding mechanism: either rules (zero-cost, ordered, built-in presets) or an embedding classifier (semantic match against exemplar prompts). Unmatched requests fall through to the default label.",
   },
 };
 
@@ -188,20 +190,22 @@ export default function RoutesPage() {
         ));
         const allLabels: string[] = Array.from(new Set([...ruleLabels, ...exemplarLabels, DEFAULT_LABEL]));
 
-        const nextKeywordLabel = (): string => {
+        const nextLabel = (prefix: string): string => {
           const taken = new Set((e.smart_rules_jsonb || []).map((r: any) => r.label).filter(Boolean));
           for (let n = 1; n < 999; n++) {
-            const cand = `kw_${n}`;
+            const cand = `${prefix}_${n}`;
             if (!taken.has(cand)) return cand;
           }
-          return "kw_x";
+          return `${prefix}_x`;
         };
 
         const addPreset = (pid: string) => {
           if (!pid) return;
           let rule: Rule;
           if (pid === "__custom_keyword") {
-            rule = { type: "keyword", pattern: "", label: nextKeywordLabel() };
+            rule = { type: "keyword", pattern: "", label: nextLabel("kw") };
+          } else if (pid === "__custom_geo") {
+            rule = { type: "geo", countries: [], label: nextLabel("geo") };
           } else {
             const meta = PRESET_BY_ID[pid];
             if (!meta) return;
@@ -319,14 +323,48 @@ export default function RoutesPage() {
               <div className="space-y-4 rounded border bg-gray-50 p-3">
                 <div className="text-sm font-semibold">Smart routing decision</div>
                 <p className="text-xs text-gray-500">
-                  Pipeline: <b>rules</b> (first match wins) → <b>embedding similarity</b> (if configured) → <code>default</code>.
-                  Each branch emits a <i>label</i> that you assign to a target below.
+                  Pick <b>one</b> deciding mechanism — rules <i>or</i> embedding classifier. Whichever you choose emits a <i>label</i> that you assign to a target below. Unmatched requests fall through to <code>default</code>.
                 </p>
 
+                {(() => {
+                  const smartMode: "rules" | "embedding" = e.smart_embedding_model_id ? "embedding" : "rules";
+                  const switchMode = (m: "rules" | "embedding") => {
+                    if (m === smartMode) return;
+                    if (m === "rules") {
+                      setEditing({
+                        ...e,
+                        smart_embedding_model_id: null,
+                        smart_exemplars_jsonb: [],
+                      });
+                    } else {
+                      setEditing({
+                        ...e,
+                        smart_rules_jsonb: [],
+                        smart_embedding_model_id: embeddingModels[0]?.id ?? null,
+                      });
+                    }
+                  };
+                  return (
+                    <div className="inline-flex overflow-hidden rounded border bg-white text-xs">
+                      <button
+                        className={`px-3 py-1 ${smartMode === "rules" ? "bg-blue-600 text-white" : "text-gray-700"}`}
+                        onClick={() => switchMode("rules")}>Rules</button>
+                      <button
+                        className={`px-3 py-1 ${smartMode === "embedding" ? "bg-blue-600 text-white" : "text-gray-700"}`}
+                        onClick={() => switchMode("embedding")}
+                        disabled={embeddingModels.length === 0}
+                        title={embeddingModels.length === 0 ? "Register an embedding model first" : ""}>
+                        Embedding classifier
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {/* ---- Rules block ---- */}
+                {!e.smart_embedding_model_id && (
                 <div>
                   <div className="mb-1 flex items-center justify-between">
-                    <label className="label !mb-0">1. Rules (optional, zero-cost, ordered)</label>
+                    <label className="label !mb-0">Rules (ordered, first match wins)</label>
                     <select
                       className="input text-xs"
                       value=""
@@ -336,11 +374,12 @@ export default function RoutesPage() {
                         <option key={p.id} value={p.id}>{p.title} → {p.label}</option>
                       ))}
                       <option value="__custom_keyword">Custom: keyword/regex</option>
+                      <option value="__custom_geo">Geo (by country)</option>
                     </select>
                   </div>
 
                   {(e.smart_rules_jsonb || []).length === 0 && (
-                    <p className="text-xs text-gray-500">No rules yet — purely embedding-based routing is fine too.</p>
+                    <p className="text-xs text-gray-500">No rules yet — every request will use the <code>default</code> label.</p>
                   )}
 
                   {(e.smart_rules_jsonb || []).map((rule, i) => {
@@ -397,35 +436,89 @@ export default function RoutesPage() {
                               {labelChip((rule as any).label || "")}
                             </>
                           )}
+                          {rule.type === "geo" && (
+                            <>
+                              <span className="rounded bg-purple-100 px-2 py-0.5 text-xs text-purple-700">geo</span>
+                              <span className="text-xs">client country in →</span>
+                              {labelChip((rule as any).label || "")}
+                              <LabelSelect
+                                value={(rule as any).label || ""}
+                                options={Array.from(new Set([...allLabels, (rule as any).label].filter(Boolean)))}
+                                onChange={(v) => update({ label: v } as any)}
+                                w="w-32"
+                              />
+                            </>
+                          )}
                           <button className="btn-danger ml-auto" onClick={remove}>×</button>
                         </div>
                         {rule.type === "preset" && PRESET_BY_ID[(rule as any).id] && (
                           <p className="mt-1 text-xs text-gray-500">{PRESET_BY_ID[(rule as any).id].hint}</p>
                         )}
+                        {rule.type === "geo" && (() => {
+                          const selected: string[] = (rule as any).countries || [];
+                          const selectedSet = new Set(selected.map((c) => c.toUpperCase()));
+                          const removeCC = (cc: string) => update({
+                            countries: selected.filter((c) => c.toUpperCase() !== cc.toUpperCase()),
+                          } as any);
+                          return (
+                            <div className="mt-2 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1">
+                                {selected.length === 0 && (
+                                  <span className="text-xs text-gray-400">No countries — rule will never match.</span>
+                                )}
+                                {selected.map((cc) => (
+                                  <span key={cc} className="flex items-center gap-1 rounded bg-purple-50 px-1.5 py-0.5 font-mono text-xs text-purple-700">
+                                    {cc.toUpperCase()} · {COUNTRY_NAME[cc.toUpperCase()] || "?"}
+                                    <button className="text-purple-500 hover:text-purple-900" onClick={() => removeCC(cc)}>×</button>
+                                  </span>
+                                ))}
+                              </div>
+                              <select
+                                className="input text-xs"
+                                value=""
+                                onChange={(ev) => {
+                                  const cc = ev.target.value;
+                                  if (!cc || selectedSet.has(cc)) return;
+                                  update({ countries: [...selected, cc] } as any);
+                                  ev.target.value = "";
+                                }}>
+                                <option value="">+ Add country…</option>
+                                {COUNTRIES.filter((c) => !selectedSet.has(c.code)).map((c) => (
+                                  <option key={c.code} value={c.code}>{c.code} — {c.name}</option>
+                                ))}
+                              </select>
+                              <p className="text-xs text-gray-500">
+                                Country lookup uses the bundled DB-IP IP-to-Country Lite database (updated monthly). Override via <code>GEOIP_DB_PATH</code> if you want a custom build.
+                              </p>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
                 </div>
+                )}
 
                 {/* ---- Embedding classifier block ---- */}
+                {e.smart_embedding_model_id != null && (
                 <div>
-                  <label className="label">2. Embedding classifier (optional)</label>
+                  <label className="label">Embedding model</label>
                   <select className="input w-full"
                     value={e.smart_embedding_model_id ?? ""}
                     onChange={(ev) => setEditing({
                       ...e,
                       smart_embedding_model_id: ev.target.value ? +ev.target.value : null,
                     })}>
-                    <option value="">— none (rules + default only) —</option>
                     {embeddingModels.map((m) => <option key={m.id} value={m.id}>{m.code} — {m.display_name}</option>)}
                   </select>
                   {embeddingModels.length === 0 && (
                     <p className="mt-1 text-xs text-amber-700">No embedding models registered. Go to the Models page and add one with <code>kind=embedding</code> (e.g. <code>text-embedding-3-small</code>).</p>
                   )}
                   <p className="mt-1 text-xs text-gray-500">
-                    On rule miss, the prompt is embedded and matched against exemplars below by cosine similarity. Cheap (typically &lt;$0.0001/req) and cached per prompt for 24h.
+                    The prompt is embedded and matched against the exemplars below by cosine similarity. Cheap (typically &lt;$0.0001/req) and cached per prompt for 24h.
                   </p>
                 </div>
+                )}
 
                 {e.smart_embedding_model_id && (
                   <>

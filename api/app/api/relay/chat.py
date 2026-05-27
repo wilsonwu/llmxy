@@ -15,7 +15,7 @@ from app.models import ApiKey, Channel, Model, RoutePolicy, RouteScope, UsageLog
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user, has_quota
 from app.services.quota import rate_limit, user_rpm
-from app.core.request_ctx import request_id_var
+from app.core.request_ctx import client_ip, request_id_var
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
@@ -92,7 +92,8 @@ async def chat_completions(
     policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model)
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(
-        policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+        policy, models_by_id, channels_by_id,
+        prompt_text=prompt_text, client_ip=client_ip(request), db=db,
     )
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no available upstream")

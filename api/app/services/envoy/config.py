@@ -294,6 +294,10 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
         "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
         "stat_prefix": "ingress_http",
         "codec_type": "AUTO",
+        # Populate X-Forwarded-For from the downstream socket so geo rules
+        # and other IP-based logic in ext_authz see the real client. Without
+        # this, ext_authz only ever sees envoy as the peer.
+        "use_remote_address": True,
         "rds": {
             "route_config_name": "llmxy_routes",
             "config_source": rds_config_source,
@@ -337,6 +341,8 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                                     {"exact": "authorization"},
                                     {"exact": "content-type"},
                                     {"exact": "x-request-id"},
+                                    {"exact": "x-forwarded-for"},
+                                    {"exact": "x-real-ip"},
                                 ]
                             },
                         },

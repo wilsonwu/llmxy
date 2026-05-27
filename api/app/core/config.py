@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     # by design (xDS push is broadcast via redis pub/sub).
     ENVOY_LOCAL_MODE_ENABLED: bool = True
 
+    # GeoIP: MaxMind GeoLite2-Country.mmdb path. Empty disables IP→country
+    # lookup entirely (geo routing rules silently no-op). Get the db from
+    # https://www.maxmind.com/en/geolite2/signup (free with attribution).
+    GEOIP_DB_PATH: str = ""
+
     # Payments
     ALIPAY_APP_ID: str = ""
     ALIPAY_PRIVATE_KEY: str = ""

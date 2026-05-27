@@ -5,11 +5,12 @@ import logging
 import random
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Channel, Model, RoutePolicy, RouteStrategy
+from app.services import geo
 from app.services.providers.smart_embedding import EmbeddingUsage, classify as embed_classify
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,16 @@ class RouteDecision:
     fallback_chain: list[tuple[Model, Channel]]
     chosen_label: Optional[str] = None
     embedding_usage: Optional[EmbeddingUsage] = None
+
+
+@dataclass
+class RuleContext:
+    """All signals available to a smart-routing rule evaluator. New routing
+    dimensions (header, time-of-day, user_id, plan tier, ...) get added here
+    once and become reachable by any rule type without changing the call
+    chain."""
+    prompt_text: str = ""
+    client_ip: Optional[str] = None
 
 
 def _ordered_targets(
@@ -111,40 +122,98 @@ PRESET_PREDICATES: dict[str, callable] = {
 }
 
 
-def _apply_rules(rules: list[dict], prompt_text: str) -> Optional[str]:
-    """Walk rules in order; return first matched label or None."""
+def _apply_rules(rules: list[dict], ctx: RuleContext) -> Optional[str]:
+    """Walk rules in order, dispatch to the registered evaluator for each
+    rule type, return the first matched label or None. Adding a new rule
+    type = add a function + register it in `_RULE_EVALUATORS`."""
     if not rules:
         return None
     for rule in rules:
         if not isinstance(rule, dict):
             continue
         rtype = rule.get("type")
-        label = rule.get("label")
+        ev = _RULE_EVALUATORS.get(rtype or "")
+        if ev is None:
+            continue
         try:
-            if rtype == "preset":
-                pid = rule.get("id")
-                pred = PRESET_PREDICATES.get(pid or "")
-                if pred and label and pred(prompt_text):
-                    return label
-            elif rtype == "tokens":
-                threshold = int(rule.get("threshold") or 0)
-                gt_label = rule.get("gt_label")
-                lte_label = rule.get("lte_label")
-                tk = _approx_token_count(prompt_text)
-                if tk > threshold and gt_label:
-                    return gt_label
-                if tk <= threshold and lte_label:
-                    return lte_label
-            elif rtype == "keyword":
-                pattern = rule.get("pattern") or ""
-                if pattern and label and re.search(pattern, prompt_text, re.IGNORECASE):
-                    return label
-            elif rtype == "code_block":
-                if label and _CODE_FENCE_RE.search(prompt_text):
-                    return label
+            label = ev(rule, ctx)
+            if label:
+                return label
         except Exception as e:
             log.warning("smart rule eval failed (%r): %s", rule, e)
     return None
+
+
+# ---- evaluators -----------------------------------------------------------
+
+def _eval_preset(rule: dict, ctx: RuleContext) -> Optional[str]:
+    pid = rule.get("id")
+    label = rule.get("label")
+    pred = PRESET_PREDICATES.get(pid or "")
+    if pred and label and pred(ctx.prompt_text):
+        return label
+    return None
+
+
+def _eval_tokens(rule: dict, ctx: RuleContext) -> Optional[str]:
+    threshold = int(rule.get("threshold") or 0)
+    gt_label = rule.get("gt_label")
+    lte_label = rule.get("lte_label")
+    tk = _approx_token_count(ctx.prompt_text)
+    if tk > threshold and gt_label:
+        return gt_label
+    if tk <= threshold and lte_label:
+        return lte_label
+    return None
+
+
+def _eval_keyword(rule: dict, ctx: RuleContext) -> Optional[str]:
+    pattern = rule.get("pattern") or ""
+    label = rule.get("label")
+    if pattern and label and re.search(pattern, ctx.prompt_text, re.IGNORECASE):
+        return label
+    return None
+
+
+def _eval_code_block(rule: dict, ctx: RuleContext) -> Optional[str]:
+    label = rule.get("label")
+    if label and _CODE_FENCE_RE.search(ctx.prompt_text):
+        return label
+    return None
+
+
+def _eval_geo(rule: dict, ctx: RuleContext) -> Optional[str]:
+    """Match by country code of the client IP. Silently no-ops when the
+    GeoIP DB is unconfigured or the IP isn't resolvable — the route then
+    continues to the next rule / default label."""
+    if not ctx.client_ip:
+        log.info("geo rule: skipped (no client_ip)")
+        return None
+    label = rule.get("label")
+    raw = rule.get("countries") or []
+    if not label or not raw:
+        log.info("geo rule: skipped (incomplete rule label=%r countries=%r)", label, raw)
+        return None
+    wanted = {str(c).upper() for c in raw if c}
+    cc = geo.lookup_country(ctx.client_ip)
+    log.info(
+        "geo rule: ip=%s resolved=%s wanted=%s label=%s -> %s",
+        ctx.client_ip, cc, sorted(wanted), label,
+        "MATCH" if cc and cc.upper() in wanted else "miss",
+    )
+    if cc and cc.upper() in wanted:
+        return label
+    return None
+
+
+RuleEvaluator = Callable[[dict, RuleContext], Optional[str]]
+_RULE_EVALUATORS: dict[str, RuleEvaluator] = {
+    "preset": _eval_preset,
+    "tokens": _eval_tokens,
+    "keyword": _eval_keyword,
+    "code_block": _eval_code_block,
+    "geo": _eval_geo,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -153,29 +222,34 @@ def _apply_rules(rules: list[dict], prompt_text: str) -> Optional[str]:
 async def _smart_pick(
     policy: RoutePolicy,
     pairs: list[tuple[Model, Channel, dict]],
-    prompt_text: str,
+    ctx: RuleContext,
     db: Optional[AsyncSession],
 ) -> tuple[list[tuple[Model, Channel]], Optional[str], Optional[EmbeddingUsage]]:
     """Return (ordered_chain, chosen_label, embedding_usage).
 
-    Pipeline: rules → embedding classifier → smart_default_label.
+    Mode is mutually exclusive: if `smart_embedding_model_id` is set the
+    classifier is the sole decider (rules are ignored even if present);
+    otherwise the rule list decides. Either way, `smart_default_label`
+    catches unmatched requests.
     """
     labels = [str(t.get("label")) for _, _, t in pairs if t.get("label")]
     unique_labels = list(dict.fromkeys(labels))
 
     chosen_label: Optional[str] = None
     embedding_usage: Optional[EmbeddingUsage] = None
-    if unique_labels and prompt_text:
-        chosen_label = _apply_rules(policy.smart_rules_jsonb or [], prompt_text)
-        if not chosen_label and policy.smart_embedding_model_id and db is not None:
-            em = await db.get(Model, int(policy.smart_embedding_model_id))
-            if em and em.enabled and em.kind == "embedding":
-                ec = await db.get(Channel, em.channel_id)
-                if ec and ec.enabled:
-                    chosen_label, _score, embedding_usage = await embed_classify(
-                        policy, em, ec, prompt_text,
-                        allowed_labels=set(unique_labels),
-                    )
+    if unique_labels:
+        if policy.smart_embedding_model_id:
+            if ctx.prompt_text and db is not None:
+                em = await db.get(Model, int(policy.smart_embedding_model_id))
+                if em and em.enabled and em.kind == "embedding":
+                    ec = await db.get(Channel, em.channel_id)
+                    if ec and ec.enabled:
+                        chosen_label, _score, embedding_usage = await embed_classify(
+                            policy, em, ec, ctx.prompt_text,
+                            allowed_labels=set(unique_labels),
+                        )
+        else:
+            chosen_label = _apply_rules(policy.smart_rules_jsonb or [], ctx)
     if not chosen_label:
         chosen_label = policy.smart_default_label
 
@@ -220,6 +294,7 @@ async def select_route(
     channels_by_id: dict[int, Channel],
     *,
     prompt_text: str | None = None,
+    client_ip: str | None = None,
     db: AsyncSession | None = None,
 ) -> Optional[RouteDecision]:
     pairs = _ordered_targets(policy, models_by_id, channels_by_id)
@@ -232,7 +307,8 @@ async def select_route(
         pairs.sort(key=lambda x: int(x[2].get("fallback_order", 0)))
         chain = [(m, c) for m, c, _ in pairs]
     elif policy.strategy == RouteStrategy.smart:
-        chain, chosen_label, embedding_usage = await _smart_pick(policy, pairs, prompt_text or "", db)
+        ctx = RuleContext(prompt_text=prompt_text or "", client_ip=client_ip)
+        chain, chosen_label, embedding_usage = await _smart_pick(policy, pairs, ctx, db)
     else:
         chain = _weighted_order(pairs)
 
