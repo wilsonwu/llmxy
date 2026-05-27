@@ -181,13 +181,22 @@ async def _check(r, user_id: int, key_id: int, key_quota_cents: int, window_star
         v = await r.get(_k_subq(int(sid)))
         if v is None:
             return False, "miss"
-        if int(v) > 0:
+        iv = int(v)
+        # Negative values are a sign of cache drift (e.g. apply_charge mirror
+        # decrementing past zero). Treat as miss so we re-hydrate from PG
+        # rather than locking the user out on a phantom negative.
+        if iv < 0:
+            return False, "miss"
+        if iv > 0:
             return True, ""
 
     wallet_raw = await r.get(_k_wallet(user_id))
     if wallet_raw is None:
         return False, "miss"
-    if int(wallet_raw) > 0:
+    wv = int(wallet_raw)
+    if wv < 0:
+        return False, "miss"
+    if wv > 0:
         return True, ""
     return False, "no active subscription and insufficient balance"
 
@@ -195,6 +204,19 @@ async def _check(r, user_id: int, key_id: int, key_quota_cents: int, window_star
 # ---------------------------------------------------------------------------
 # Write-through mirroring (called by billing.py callers AFTER PG commit)
 # ---------------------------------------------------------------------------
+
+# Lua: decrement KEYS[1] by ARGV[1] only if the key exists. If missing, do
+# nothing — letting the next has_quota_fast cache miss re-hydrate the true
+# value from PG. Prevents the "resurrect as negative" bug where DECRBY on
+# a deleted/expired key materializes a phantom -X value that never expires
+# and never re-hydrates.
+_DECR_IF_EXISTS_LUA = """
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    return redis.call('DECRBY', KEYS[1], ARGV[1])
+end
+return nil
+"""
+
 
 async def apply_charge(
     user_id: int,
@@ -218,10 +240,12 @@ async def apply_charge(
             if amount <= 0:
                 continue
             if kind == "sub":
-                pipe.decrby(_k_subq(int(ident)), amount)
+                pipe.eval(_DECR_IF_EXISTS_LUA, 1, _k_subq(int(ident)), amount)
             elif kind == "wallet":
-                pipe.decrby(_k_wallet(user_id), amount)
+                pipe.eval(_DECR_IF_EXISTS_LUA, 1, _k_wallet(user_id), amount)
         if key_id is not None:
+            # kused is safe to INCRBY-create: starting fresh at +cost matches
+            # what hydrate_key_used would set if there were no prior charges.
             pipe.incrby(_k_kused(key_id, window_start_epoch), cost_cents)
         await pipe.execute()
     except Exception as e:
@@ -293,3 +317,36 @@ async def invalidate_user_quota(user_id: int) -> None:
         await pipe.execute()
     except Exception as e:
         log.warning("invalidate_user_quota uid=%s: %s", user_id, e)
+
+
+async def resync_on_startup() -> None:
+    """Drop all cached quota state on api startup so the next request
+    re-hydrates from PG. Guards against drift accumulated by older code
+    paths or by api processes that crashed mid-mirror.
+
+    Uses SCAN (non-blocking) rather than KEYS so this is safe on large
+    deployments. Hydration stays lazy — we don't pre-warm because there
+    may be many idle users; the hot users will re-hydrate on first hit.
+
+    Multi-worker safe: a short NX lock guarantees only one worker per
+    restart cycle does the SCAN+DEL; the others no-op.
+    """
+    try:
+        r = get_redis()
+        got = await r.set("quota_cache:resync_lock", "1", ex=60, nx=True)
+        if not got:
+            return
+        patterns = ("wallet:*", "subq:*", "usubs:*", "kused:*", "qhydr:*")
+        total = 0
+        for pat in patterns:
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(cursor=cursor, match=pat, count=500)
+                if keys:
+                    await r.delete(*keys)
+                    total += len(keys)
+                if cursor == 0:
+                    break
+        log.info("quota_cache resync on startup: cleared %d keys", total)
+    except Exception as e:
+        log.warning("quota_cache resync_on_startup failed: %s", e)

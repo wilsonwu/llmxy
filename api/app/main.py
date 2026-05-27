@@ -252,6 +252,15 @@ async def startup() -> None:
     except Exception as e:
         logging.warning("cache_invalidate listener failed to start (continuing): %s", e)
 
+    # Resync quota cache: drop any drift accumulated by prior api processes
+    # (e.g. negative wallet/subq values from older write-through bugs). Next
+    # request re-hydrates from PG, which is the source of truth.
+    try:
+        from app.services import quota_cache
+        await quota_cache.resync_on_startup()
+    except Exception as e:
+        logging.warning("quota_cache resync failed (continuing): %s", e)
+
     # Report transport state so operators see at a glance whether envoy
     # is taking traffic or whether the api-direct path is the only one up.
     try:
