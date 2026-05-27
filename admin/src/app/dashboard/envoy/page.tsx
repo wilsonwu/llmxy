@@ -303,10 +303,10 @@ export default function EnvoyPage() {
                     <button className="btn-primary" onClick={() => act(i.id, "start")}>Start</button>
                   )}
                   {i.mode === "local" && i.status === "running" && (
-                    <button className="btn-outline" onClick={() => act(i.id, "stop")}>Stop</button>
+                    <button className="btn-primary" onClick={() => act(i.id, "reload")}>Sync</button>
                   )}
                   {i.mode === "remote" && (
-                    <button className="btn-primary" onClick={() => act(i.id, "reload")}>Push</button>
+                    <button className="btn-primary" onClick={() => act(i.id, "reload")}>Sync</button>
                   )}
                   <span className="relative inline-block">
                     <button
@@ -328,11 +328,10 @@ export default function EnvoyPage() {
                         >
                           {i.mode === "local" && i.status === "running" && (
                             <>
-                              <MenuItem onClick={() => { act(i.id, "reload"); setOpenMenu(null); }}>Reload</MenuItem>
                               <MenuItem onClick={() => { act(i.id, "restart"); setOpenMenu(null); }}>Restart</MenuItem>
+                              <MenuItem onClick={() => { act(i.id, "stop"); setOpenMenu(null); }}>Stop</MenuItem>
                             </>
                           )}
-                          <MenuItem onClick={() => { act(i.id, "regenerate-config"); setOpenMenu(null); }}>Regenerate config</MenuItem>
                           <MenuItem onClick={() => { openDrawer(i, "stats"); setOpenMenu(null); }}>Stats</MenuItem>
                           {i.mode === "local" && (
                             <MenuItem onClick={() => { openDrawer(i, "logs"); setOpenMenu(null); }}>Logs</MenuItem>

@@ -433,19 +433,6 @@ async def reload_instance(inst_id: int, _: User = Depends(require_admin), db: As
     return await runtime.reload(db, inst)
 
 
-@router.post("/instances/{inst_id}/regenerate-config", response_model=EnvoyInstanceOut)
-async def regenerate_config(inst_id: int, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    inst = await db.get(EnvoyInstance, inst_id)
-    if not inst:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
-    from app.services.envoy import xds_server
-    inst.config_version = (inst.config_version or 0) + 1
-    await db.commit()
-    xds_server.notify_node(inst.node_id)
-    await db.refresh(inst)
-    return inst
-
-
 @router.get("/instances/{inst_id}/stats")
 async def instance_stats(inst_id: int, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """Curated stats from envoy admin. Works for both local and remote — uses
