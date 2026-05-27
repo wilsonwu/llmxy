@@ -223,6 +223,14 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Initial migration — nuke and pave. Drops every table, enum, sequence,
-    # function, etc. in the public schema in one shot.
+    # function, etc. in the public schema in one shot. Recreate the
+    # alembic_version table afterwards so alembic's own post-downgrade
+    # DELETE (to remove this revision from the history) doesn't blow up.
     op.execute("DROP SCHEMA public CASCADE")
     op.execute("CREATE SCHEMA public")
+    op.execute(
+        "CREATE TABLE alembic_version ("
+        "version_num VARCHAR(32) NOT NULL, "
+        "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
+    )
+    op.execute("INSERT INTO alembic_version (version_num) VALUES ('0001_initial')")
