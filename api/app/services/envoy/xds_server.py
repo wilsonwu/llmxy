@@ -371,9 +371,20 @@ class _ADSService(ads_pb2_grpc.AggregatedDiscoveryServiceServicer):
             # Initial push: send everything subscribed in the first request.
             pending = set(subscribed)
             evt.set()
+            # Heartbeat: while the ADS stream is open, the envoy is by
+            # definition alive (TCP/HTTP2 keepalive would have torn it down
+            # otherwise). Wake at least every HEARTBEAT_SECONDS to refresh
+            # last_seen_at so the UI doesn't flap to "offline" just because
+            # config hasn't changed in a while.
+            HEARTBEAT_SECONDS = 20
             while True:
-                await evt.wait()
-                evt.clear()
+                try:
+                    await asyncio.wait_for(evt.wait(), timeout=HEARTBEAT_SECONDS)
+                    evt.clear()
+                except asyncio.TimeoutError:
+                    # Pure heartbeat tick — no config to push, just touch.
+                    await _touch_seen(node_id)
+                    continue
                 if not subscribed:
                     continue
                 # External notify (notify_node) wakes us without populating
@@ -384,6 +395,8 @@ class _ADSService(ads_pb2_grpc.AggregatedDiscoveryServiceServicer):
                 to_push = pending & subscribed
                 pending = set()
                 if not to_push:
+                    # Spurious wakeup — still proves the stream is healthy.
+                    await _touch_seen(node_id)
                     continue
                 resources_by_type = await _build_resources(node_id)
                 latest_version: str | None = None
@@ -408,8 +421,9 @@ class _ADSService(ads_pb2_grpc.AggregatedDiscoveryServiceServicer):
                     )
                     resp.resources.extend(resources)
                     yield resp
-                if latest_version is not None:
-                    await _touch_seen(node_id, version=latest_version)
+                # Always touch on wake — either a real push happened (use
+                # latest_version) or it was a no-op ACK (touch with None).
+                await _touch_seen(node_id, version=latest_version)
         finally:
             reader_task.cancel()
             _node_events.pop(node_id, None)
