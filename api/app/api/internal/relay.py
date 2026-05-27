@@ -32,9 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.crypto import decrypt
 from app.core.security import hash_api_key
 from app.db.session import AsyncSessionLocal
-from app.models import Channel, KeyStatus, Model, RoutePolicy, RouteScope, UsageLog, UserStatus
+from app.models import Channel, KeyStatus, Model, RoutePolicy, RouteScope, UserStatus
 from app.services import api_key_cache, providers, quota_cache
-from app.services.billing import calc_cost_cents, charge_user
 from app.services.envoy.config import _channel_cluster_name, _is_direct
 from app.services.quota import rate_limit
 
@@ -155,33 +154,6 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         rid = request.headers.get("x-request-id") or f"req-{uuid.uuid4().hex[:16]}"
         cluster = _channel_cluster_name(c.id) if _is_direct(c) else "translator"
 
-        # Smart-mode embedding-classifier overhead is invisible to Envoy/ALS —
-        # record it here so it shows up in usage/billing tied to the same
-        # request_id. Cache hits have prompt_tokens=0 → no charge, but we
-        # still emit a status='cache' row for traceability.
-        eu = getattr(decision, "embedding_usage", None)
-        if eu is not None:
-            try:
-                emb_cost = calc_cost_cents(eu.model, eu.prompt_tokens, 0) if eu.status == "ok" else 0
-                if emb_cost > 0:
-                    from app.models import ApiKey, User
-                    ak_row = await db.get(ApiKey, snap.id)
-                    user_row = await db.get(User, snap.user_id)
-                    if ak_row and user_row:
-                        await charge_user(db, user_row, ak_row, emb_cost, ref_id=rid, note=f"{model_name} [classifier]")
-                        db.info.setdefault("_quota_invalidate_uids", set()).add(snap.user_id)
-                db.add(UsageLog(
-                    user_id=snap.user_id, api_key_id=snap.id, model_id=eu.model.id,
-                    user_facing_model=model_name, upstream_model=eu.upstream_model,
-                    prompt_tokens=eu.prompt_tokens, completion_tokens=0,
-                    cost_cents=emb_cost, latency_ms=eu.latency_ms,
-                    status=eu.status, request_id=rid,
-                    kind="classifier", resolved_label=decision.chosen_label,
-                ))
-                await db.commit()
-            except Exception as e:
-                log.warning("embedding usage log failed rid=%s: %s", rid, e)
-
         headers: dict[str, str] = {
             "x-llmxy-cluster": cluster,
             "x-llmxy-request-id": rid,
@@ -195,6 +167,20 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         }
         if decision.chosen_label:
             headers["x-llmxy-resolved-label"] = decision.chosen_label
+
+        # Smart-mode embedding-classifier overhead: forwarded as headers so
+        # ALS can write the classifier UsageLog + charge in the SAME PG
+        # transaction as the relay row. Writing it here would split billing
+        # across two transactions and one could persist while the other
+        # rolls back, leaving "classifier-only" orphan rows when envoy
+        # never proxies the relay (cluster miss, upstream timeout, etc.).
+        eu = getattr(decision, "embedding_usage", None)
+        if eu is not None:
+            headers["x-llmxy-classifier-model-id"] = str(eu.model.id)
+            headers["x-llmxy-classifier-upstream-model"] = eu.upstream_model or ""
+            headers["x-llmxy-classifier-prompt-tokens"] = str(int(eu.prompt_tokens or 0))
+            headers["x-llmxy-classifier-latency-ms"] = str(int(eu.latency_ms or 0))
+            headers["x-llmxy-classifier-status"] = eu.status or "ok"
 
         # Inject upstream credentials only for direct (OpenAI-compat) clusters.
         # Translator cluster reaches our own FastAPI which holds the channel

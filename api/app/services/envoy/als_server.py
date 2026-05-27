@@ -111,6 +111,16 @@ async def _ingest_entry(entry) -> None:
     upstream_model = _hdr(headers, "x-llmxy-upstream-model")
     resolved_label = _hdr(headers, "x-llmxy-resolved-label")
 
+    # Classifier overhead — ext_authz forwards these as headers so we can
+    # write the classifier UsageLog + bill it in the SAME PG transaction as
+    # the relay row. Without this, the two could split (ext_authz committed,
+    # ALS never fired → orphan "classifier-only" rows).
+    cls_model_id = _hdr(headers, "x-llmxy-classifier-model-id")
+    cls_upstream = _hdr(headers, "x-llmxy-classifier-upstream-model")
+    cls_prompt_tokens_raw = _hdr(headers, "x-llmxy-classifier-prompt-tokens")
+    cls_latency_raw = _hdr(headers, "x-llmxy-classifier-latency-ms")
+    cls_status = _hdr(headers, "x-llmxy-classifier-status")
+
     if not user_id or not model_id:
         # Likely a /v1/models listing or other non-billable call.
         return
@@ -136,23 +146,44 @@ async def _ingest_entry(entry) -> None:
     uid = int(user_id)
     akid = int(api_key_id) if (api_key_id and api_key_id.isdigit()) else None
     mid = int(model_id) if model_id.isdigit() else None
+    cls_mid = int(cls_model_id) if (cls_model_id and cls_model_id.isdigit()) else None
+    cls_prompt_tokens = int(cls_prompt_tokens_raw) if (cls_prompt_tokens_raw and cls_prompt_tokens_raw.isdigit()) else 0
+    cls_latency_ms = int(cls_latency_raw) if (cls_latency_raw and cls_latency_raw.isdigit()) else 0
 
-    # Single transaction: charge + UsageLog row commit together, or roll back
-    # together. On rollback we still want an audit row, so we write a degraded
-    # UsageLog (status=error, cost=0) in a fresh session as a best-effort tail.
+    # Single transaction: relay charge + relay log + (optional) classifier
+    # charge + classifier log, all together. On rollback we still want an
+    # audit row, so we write a degraded UsageLog (status=error, cost=0) in a
+    # fresh session as a best-effort tail.
     structured_breakdown: list[tuple[str, int, int]] = []
     window_start_epoch = 0
+    total_cost = 0
     try:
         async with AsyncSessionLocal() as db:
             m = await db.get(Model, mid) if mid is not None else None
-            cost = calc_cost_cents(m, prompt_tokens, completion_tokens) if m else 0
-            if cost > 0 and status_str == "ok":
+            relay_cost = calc_cost_cents(m, prompt_tokens, completion_tokens) if m else 0
+            cls_m = await db.get(Model, cls_mid) if cls_mid is not None else None
+            cls_cost = (
+                calc_cost_cents(cls_m, cls_prompt_tokens, 0)
+                if (cls_m and cls_status == "ok") else 0
+            )
+            # Only the relay's success status gates billing; classifier
+            # always already ran (we paid the embedding provider) so we
+            # bill it whenever cls_status == "ok", regardless of whether
+            # the relay itself succeeded.
+            billable_relay = relay_cost if status_str == "ok" else 0
+            total_cost = billable_relay + cls_cost
+            if total_cost > 0:
                 from app.models import ApiKey, QuotaMode, User
                 user = await db.get(User, uid)
                 api_key = await db.get(ApiKey, akid) if akid is not None else None
                 if user:
+                    note = user_facing_model or ""
+                    if cls_cost > 0 and billable_relay > 0:
+                        note = f"{note} [relay+classifier]"
+                    elif cls_cost > 0:
+                        note = f"{note} [classifier]"
                     structured_breakdown = await charge_user(
-                        db, user, api_key, cost, ref_id=request_id, note=user_facing_model,
+                        db, user, api_key, total_cost, ref_id=request_id, note=note,
                     )
                     if api_key is not None:
                         if (
@@ -164,10 +195,19 @@ async def _ingest_entry(entry) -> None:
                 user_id=uid, api_key_id=akid, model_id=mid,
                 user_facing_model=user_facing_model, upstream_model=upstream_model,
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-                cost_cents=cost, latency_ms=duration_ms,
+                cost_cents=billable_relay, latency_ms=duration_ms,
                 status=status_str, request_id=request_id,
                 kind="relay", resolved_label=resolved_label,
             ))
+            if cls_mid is not None and cls_status:
+                db.add(UsageLog(
+                    user_id=uid, api_key_id=akid, model_id=cls_mid,
+                    user_facing_model=user_facing_model, upstream_model=cls_upstream or None,
+                    prompt_tokens=cls_prompt_tokens, completion_tokens=0,
+                    cost_cents=cls_cost, latency_ms=cls_latency_ms,
+                    status=cls_status, request_id=request_id,
+                    kind="classifier", resolved_label=resolved_label,
+                ))
             await db.commit()
         # After PG commit succeeds, mirror counters to Redis so the next
         # ext_authz read sees fresh numbers. Failure here is non-fatal —
@@ -176,7 +216,7 @@ async def _ingest_entry(entry) -> None:
             try:
                 from app.services import quota_cache
                 await quota_cache.apply_charge(
-                    user_id=uid, key_id=akid, cost_cents=cost,
+                    user_id=uid, key_id=akid, cost_cents=total_cost,
                     window_start_epoch=window_start_epoch,
                     breakdown=structured_breakdown,
                 )
@@ -184,7 +224,7 @@ async def _ingest_entry(entry) -> None:
                 log.warning("quota_cache mirror failed rid=%s: %s", request_id, e)
     except Exception as e:
         log.warning(
-            "ALS billing+log tx rolled back rid=%s user=%s cost_attempt=? err=%s; writing degraded log",
+            "ALS billing+log tx rolled back rid=%s user=%s err=%s; writing degraded log",
             request_id, uid, e,
         )
         try:
