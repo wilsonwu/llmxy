@@ -1,4 +1,13 @@
-"""Renders Envoy bootstrap + CDS/RDS/LDS YAML for a single instance.
+"""Renders Envoy CDS/RDS/LDS resource dicts. Bootstrap rendering lives in
+`bootstrap.py`.
+
+All envoy instances (local + remote) consume CDS/LDS/RDS via xDS ADS from
+the control plane gRPC server — no file-based config, no `watched_directory`
+reload. The xds_server packs these dicts into proto Any messages and pushes
+them on the ADS stream. The address rewrites that depend on mode (loopback
+vs CONTROL_PLANE_PUBLIC_HOST) and the bind port that depends on mode
+(operator-picked vs fixed REMOTE_BIND_LISTEN_PORT) are applied in xds_server,
+not here — this file only emits the canonical shape.
 
 Direct clusters (envoy → upstream) handle OpenAI-compatible providers only.
 Anything else (Anthropic / Gemini / Azure) routes to a single `translator`
@@ -14,16 +23,14 @@ prefix the client sends, e.g. `.../v1`).
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 from urllib.parse import urlparse
 
-import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models import Channel, EnvoyInstance, EnvoyMode, EnvoyStatus
+from app.models import Channel, EnvoyInstance
 
 log = logging.getLogger(__name__)
 
@@ -189,36 +196,9 @@ def render_cds(channels: list[Channel]) -> dict[str, Any]:
         },
     })
 
-    # 3. ALS gRPC target
-    clusters.append({
-        "name": "als",
-        "type": "STRICT_DNS",
-        "connect_timeout": "1s",
-        "lb_policy": "ROUND_ROBIN",
-        "typed_extension_protocol_options": {
-            "envoy.extensions.upstreams.http.v3.HttpProtocolOptions": {
-                "@type": "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
-                "explicit_http_config": {"http2_protocol_options": {}},
-            }
-        },
-        "load_assignment": {
-            "cluster_name": "als",
-            "endpoints": [{
-                "lb_endpoints": [{
-                    "endpoint": {
-                        "address": {
-                            "socket_address": {
-                                "address": settings.INTERNAL_API_HOST,
-                                "port_value": settings.ALS_GRPC_PORT,
-                            }
-                        }
-                    }
-                }]
-            }],
-        },
-    })
-
-    # 4. per-channel direct clusters
+    # 3. per-channel direct clusters. ALS and xDS clusters are declared
+    # statically in bootstrap (so envoy can dial them before CDS arrives) —
+    # never sent via CDS.
     for ch in channels:
         if not ch.enabled or not _is_direct(ch):
             continue
@@ -305,16 +285,11 @@ def render_rds() -> dict[str, Any]:
 
 
 def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
-    if inst.mode == EnvoyMode.remote or not inst.config_dir:
-        rds_config_source = {"ads": {}, "resource_api_version": "V3"}
-    else:
-        rds_config_source = {
-            "path_config_source": {
-                "path": os.path.join(inst.config_dir, "rds.yaml"),
-                "watched_directory": {"path": inst.config_dir},
-            },
-            "resource_api_version": "V3",
-        }
+    """Listener template. RDS source is ADS for everyone (file-based path is
+    gone). The actual bind port and ext_authz endpoint get rewritten in
+    xds_server._render_lds per-instance — what we emit here is just a
+    placeholder using inst.listen_port that gets overridden."""
+    rds_config_source = {"ads": {}, "resource_api_version": "V3"}
     hcm = {
         "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
         "stat_prefix": "ingress_http",
@@ -329,7 +304,7 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                 "@type": "type.googleapis.com/envoy.extensions.access_loggers.grpc.v3.HttpGrpcAccessLogConfig",
                 "common_config": {
                     "log_name": "llmxy_relay",
-                    "grpc_service": {"envoy_grpc": {"cluster_name": "als"}},
+                    "grpc_service": {"envoy_grpc": {"cluster_name": "als_cluster"}},
                     "transport_api_version": "V3",
                 },
                 "additional_request_headers_to_log": [
@@ -419,93 +394,25 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
     }]}
 
 
-def render_bootstrap(inst: EnvoyInstance) -> dict[str, Any]:
-    cds_path = os.path.join(inst.config_dir, "cds.yaml")
-    lds_path = os.path.join(inst.config_dir, "lds.yaml")
-    return {
-        "node": {"id": f"llmxy-{inst.name}", "cluster": "llmxy"},
-        "admin": {
-            "address": {
-                "socket_address": {"address": "127.0.0.1", "port_value": inst.admin_port}
-            }
-        },
-        "dynamic_resources": {
-            "cds_config": {
-                "path_config_source": {
-                    "path": cds_path,
-                    "watched_directory": {"path": inst.config_dir},
-                },
-                "resource_api_version": "V3",
-            },
-            "lds_config": {
-                "path_config_source": {
-                    "path": lds_path,
-                    "watched_directory": {"path": inst.config_dir},
-                },
-                "resource_api_version": "V3",
-            },
-        },
-    }
-
-
-def _atomic_write(path: str, content: str) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.replace(tmp, path)
-
-
-async def write_all(db: AsyncSession, inst: EnvoyInstance) -> int:
-    channels = (await db.execute(select(Channel).order_by(Channel.id))).scalars().all()
-    os.makedirs(inst.config_dir, exist_ok=True)
-
-    files = {
-        "cds.yaml": render_cds(channels),
-        "rds.yaml": render_rds(),
-        "lds.yaml": render_lds(inst),
-        "bootstrap.yaml": render_bootstrap(inst),
-    }
-    # write rds/cds/lds first (file-based hot-reload reads these), then bootstrap
-    for fname in ("cds.yaml", "rds.yaml", "lds.yaml", "bootstrap.yaml"):
-        path = os.path.join(inst.config_dir, fname)
-        _atomic_write(path, yaml.safe_dump(files[fname], sort_keys=False))
-
-    inst.config_version = (inst.config_version or 0) + 1
-    log.info("envoy[%s] wrote config v%d to %s", inst.name, inst.config_version, inst.config_dir)
-    return inst.config_version
-
-
-async def regenerate(db: AsyncSession, inst: EnvoyInstance) -> int:
-    return await write_all(db, inst)
-
-
 async def regenerate_all_running(db: AsyncSession) -> int:
-    """Refresh config for every active envoy: rewrite YAML for local instances
-    that are running, and ping the xDS server for remote nodes (regardless of
-    connection state — they'll pick it up next stream open)."""
+    """Trigger an xDS push to every envoy instance. Bumps config_version so
+    operators can see something moved, and wakes the live ADS stream (or
+    no-ops if the node isn't currently connected — they'll pick the new
+    version up on next stream open).
+
+    Mode-agnostic: local and remote both consume CDS/LDS/RDS via the same
+    xDS server. There is no longer a file-based path for local."""
+    from app.services.envoy import xds_server
     rows = (await db.execute(select(EnvoyInstance))).scalars().all()
     n = 0
-    dirty_remote: list[str] = []
     for inst in rows:
-        if inst.mode == EnvoyMode.remote:
-            inst.config_version = (inst.config_version or 0) + 1
-            dirty_remote.append(inst.node_id)
-            n += 1
-            continue
-        if inst.status != EnvoyStatus.running:
-            continue
-        try:
-            await write_all(db, inst)
-            n += 1
-        except Exception as e:
-            log.warning("regen failed for envoy[%s]: %s", inst.name, e)
+        inst.config_version = (inst.config_version or 0) + 1
+        n += 1
     if n:
         await db.commit()
-    if dirty_remote:
+    for inst in rows:
         try:
-            from app.services.envoy import xds_server
-            for nid in dirty_remote:
-                xds_server.notify_node(nid)
+            xds_server.notify_node(inst.node_id)
         except Exception as e:
-            log.debug("xds notify skipped: %s", e)
+            log.debug("xds notify skipped for %s: %s", inst.node_id, e)
     return n

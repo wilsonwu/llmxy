@@ -1,21 +1,60 @@
 node:
   id: llmxy-ins1
-  cluster: llmxy
+  cluster: llmxy-local
 admin:
   address:
     socket_address:
-      address: 127.0.0.1
+      address: 0.0.0.0
       port_value: 9001
 dynamic_resources:
+  ads_config:
+    api_type: GRPC
+    transport_api_version: V3
+    grpc_services:
+    - envoy_grpc:
+        cluster_name: xds_cluster
+    set_node_on_first_message_only: true
   cds_config:
-    path_config_source:
-      path: /Users/wilsonwu/wilsonwudata/mycode/llmxy/api/var/envoy/ins1/cds.yaml
-      watched_directory:
-        path: /Users/wilsonwu/wilsonwudata/mycode/llmxy/api/var/envoy/ins1
+    ads: {}
     resource_api_version: V3
   lds_config:
-    path_config_source:
-      path: /Users/wilsonwu/wilsonwudata/mycode/llmxy/api/var/envoy/ins1/lds.yaml
-      watched_directory:
-        path: /Users/wilsonwu/wilsonwudata/mycode/llmxy/api/var/envoy/ins1
+    ads: {}
     resource_api_version: V3
+static_resources:
+  clusters:
+  - name: xds_cluster
+    type: STRICT_DNS
+    connect_timeout: 5s
+    dns_lookup_family: V4_PREFERRED
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: xds_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8003
+  - name: als_cluster
+    type: STRICT_DNS
+    connect_timeout: 5s
+    dns_lookup_family: V4_PREFERRED
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config:
+          http2_protocol_options: {}
+    load_assignment:
+      cluster_name: als_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8002

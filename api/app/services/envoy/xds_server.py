@@ -129,20 +129,38 @@ async def _pubsub_listener() -> None:
 
 # --- resource rendering -----------------------------------------------------
 
-def _render_lds_remote(inst: EnvoyInstance) -> dict[str, Any]:
-    public_host = settings.CONTROL_PLANE_PUBLIC_HOST or "127.0.0.1"
-    public_port = settings.API_PORT
+def _target_addr(inst: EnvoyInstance) -> tuple[str, int]:
+    """Where this envoy should dial back for ext_authz / translator. Local
+    envoys live on the same host as the api process, so loopback is both
+    correct and avoids depending on CONTROL_PLANE_PUBLIC_HOST being set in
+    single-host dev. Remote uses the operator-supplied public host."""
+    if inst.mode == EnvoyMode.local:
+        return ("127.0.0.1", settings.API_PORT)
+    return (settings.CONTROL_PLANE_PUBLIC_HOST or "127.0.0.1", settings.API_PORT)
+
+
+def _listen_bind_port(inst: EnvoyInstance) -> int:
+    """LDS bind port. Local uses inst.listen_port (what the operator picked).
+    Remote uses the FIXED REMOTE_BIND_LISTEN_PORT — inst.listen_port for remote
+    rows is the externally reachable port (NodePort / host port), which differs
+    from the in-pod containerPort the listener actually binds."""
+    from app.services.envoy.bootstrap import REMOTE_BIND_LISTEN_PORT
+    if inst.mode == EnvoyMode.local:
+        return inst.listen_port
+    return REMOTE_BIND_LISTEN_PORT
+
+
+def _render_lds(inst: EnvoyInstance) -> dict[str, Any]:
+    """LDS for any instance. Rewrites the listener bind port (mode-dependent)
+    and the ext_authz http_service endpoint (so envoy dials the right control
+    plane address). RDS source is forced to ADS."""
+    target_host, target_port = _target_addr(inst)
+    bind_port = _listen_bind_port(inst)
     lds = envoy_config.render_lds(inst)
-    # Force remote listeners onto the FIXED bind port baked into the manifest
-    # (containerPort). inst.listen_port for remote rows holds the externally
-    # reachable port the operator typed in (NodePort for k8s, host port for
-    # docker --network=host) — driving envoy's bind off of that would either
-    # collide with the manifest's containerPort or fail to bind entirely.
-    from app.services.envoy.remote_bootstrap import REMOTE_BIND_LISTEN_PORT
     for res in lds.get("resources", []):
         sock = res.get("address", {}).get("socket_address")
         if sock:
-            sock["port_value"] = REMOTE_BIND_LISTEN_PORT
+            sock["port_value"] = bind_port
         for fc in res.get("filter_chains", []):
             for f in fc.get("filters", []):
                 tc = f.get("typed_config", {})
@@ -151,36 +169,33 @@ def _render_lds_remote(inst: EnvoyInstance) -> dict[str, Any]:
                         "ads": {},
                         "resource_api_version": "V3",
                     }
-                for al in tc.get("access_log", []) or []:
-                    al_tc = al.get("typed_config", {})
-                    cc = al_tc.get("common_config", {})
-                    gs = cc.get("grpc_service", {})
-                    eg = gs.get("envoy_grpc", {})
-                    if eg.get("cluster_name") == "als":
-                        eg["cluster_name"] = "als_cluster"
                 for hf in tc.get("http_filters", []) or []:
                     htc = hf.get("typed_config", {})
                     http_svc = htc.get("http_service")
                     if http_svc:
-                        http_svc["server_uri"]["uri"] = f"http://{public_host}:{public_port}"
+                        http_svc["server_uri"]["uri"] = f"http://{target_host}:{target_port}"
                         http_svc["server_uri"]["cluster"] = "ext_authz"
     return lds
 
 
-def _render_cds_remote(channels: list[Channel]) -> dict[str, Any]:
-    public_host = settings.CONTROL_PLANE_PUBLIC_HOST or "127.0.0.1"
-    public_port = settings.API_PORT
+def _render_cds(inst: EnvoyInstance, channels: list[Channel]) -> dict[str, Any]:
+    """CDS for any instance. Filters out the static `als` cluster (now lives
+    in bootstrap.static_resources as `als_cluster`) and rewrites the
+    translator / ext_authz endpoints to the right control plane address."""
+    target_host, target_port = _target_addr(inst)
     cds = envoy_config.render_cds(channels)
     kept: list[dict[str, Any]] = []
     for res in cds.get("resources", []):
         name = res.get("name")
         if name == "als":
+            # ALS cluster is defined statically in bootstrap (under the name
+            # "als_cluster") so envoy can dial ALS before CDS arrives.
             continue
         if name in ("translator", "ext_authz"):
             try:
                 ep = res["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
-                ep["address"] = public_host
-                ep["port_value"] = public_port
+                ep["address"] = target_host
+                ep["port_value"] = target_port
             except Exception:
                 pass
         kept.append(res)
@@ -195,9 +210,9 @@ async def _build_resources(node_id: str) -> dict[str, list[any_pb2.Any]]:
         if inst is None:
             return {TYPE_URL_CLUSTER: [], TYPE_URL_LISTENER: [], TYPE_URL_ROUTE: []}
         channels = (await db.execute(select(Channel).order_by(Channel.id))).scalars().all()
-        cds_dict = _render_cds_remote(channels)
+        cds_dict = _render_cds(inst, channels)
         rds_dict = envoy_config.render_rds()
-        lds_dict = _render_lds_remote(inst)
+        lds_dict = _render_lds(inst)
 
     def _pack(dicts: list[dict[str, Any]], type_url: str) -> list[any_pb2.Any]:
         proto_cls = _TYPE_TO_PROTO[type_url]
@@ -239,11 +254,15 @@ def check_token(context: grpc.aio.ServicerContext) -> bool:
 
 
 async def _authn_node(node_id: str) -> EnvoyInstance | None:
+    """Look up the envoy_instances row for this node_id. Both local and remote
+    envoys connect via ADS now, so either mode is allowed — the node_id is
+    deterministic per row, and the static x-llmxy-token check above already
+    gates who can open the stream at all."""
     async with AsyncSessionLocal() as db:
         inst = (
             await db.execute(select(EnvoyInstance).where(EnvoyInstance.node_id == node_id))
         ).scalar_one_or_none()
-        if inst is None or inst.mode != EnvoyMode.remote:
+        if inst is None:
             return None
         return inst
 

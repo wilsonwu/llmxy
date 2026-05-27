@@ -438,16 +438,10 @@ async def regenerate_config(inst_id: int, _: User = Depends(require_admin), db: 
     inst = await db.get(EnvoyInstance, inst_id)
     if not inst:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
-    if inst.mode == EnvoyMode.remote:
-        from app.services.envoy import xds_server
-        inst.config_version = (inst.config_version or 0) + 1
-        await db.commit()
-        xds_server.notify_node(inst.node_id)
-        await db.refresh(inst)
-        return inst
-    from app.services.envoy import config as envoy_config
-    await envoy_config.regenerate(db, inst)
+    from app.services.envoy import xds_server
+    inst.config_version = (inst.config_version or 0) + 1
     await db.commit()
+    xds_server.notify_node(inst.node_id)
     await db.refresh(inst)
     return inst
 
@@ -556,13 +550,13 @@ async def bootstrap_template(
 ):
     """Return a ready-to-paste envoy bootstrap.yaml. Operator saves it on the
     envoy host and runs `envoy -c bootstrap.yaml`."""
-    from app.services.envoy import remote_bootstrap
+    from app.services.envoy import bootstrap as envoy_bootstrap
     inst = await db.get(EnvoyInstance, inst_id)
     if not inst:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     if inst.mode != EnvoyMode.remote:
         raise HTTPException(status.HTTP_409_CONFLICT, "bootstrap templates are remote-only")
-    return EnvoyBootstrapOut(yaml=remote_bootstrap.render_bootstrap_yaml(inst))
+    return EnvoyBootstrapOut(yaml=envoy_bootstrap.render_bootstrap_yaml(inst))
 
 
 @router.post("/manifests/preview", response_model=EnvoyManifestsOut)
@@ -577,26 +571,26 @@ async def manifests_preview(
     are FIXED (envoy standards 9000/9001 + NodePort 30000/30001) and never
     sourced from form input; the form's listen/admin port fields are filled
     in LATER by the operator with the real reachable values."""
-    from app.services.envoy import remote_bootstrap
+    from app.services.envoy import bootstrap as envoy_bootstrap
     transient = EnvoyInstance(
         name=req.name,
         mode=EnvoyMode.remote,
         node_id=f"llmxy-remote-{req.name}",
-        listen_port=remote_bootstrap.REMOTE_BIND_LISTEN_PORT,
-        admin_port=remote_bootstrap.REMOTE_BIND_ADMIN_PORT,
+        listen_port=envoy_bootstrap.REMOTE_BIND_LISTEN_PORT,
+        admin_port=envoy_bootstrap.REMOTE_BIND_ADMIN_PORT,
         status=EnvoyStatus.stopped,
     )
-    k8s_yaml = remote_bootstrap.render_k8s_manifest(transient)
+    k8s_yaml = envoy_bootstrap.render_k8s_manifest(transient)
     return EnvoyManifestsOut(
-        bootstrap_yaml=remote_bootstrap.render_bootstrap_yaml(transient),
+        bootstrap_yaml=envoy_bootstrap.render_bootstrap_yaml(transient),
         k8s_yaml=k8s_yaml,
-        docker_run=remote_bootstrap.render_docker_run(transient),
+        docker_run=envoy_bootstrap.render_docker_run(transient),
         node_id=transient.node_id,
         control_plane_host=settings.CONTROL_PLANE_PUBLIC_HOST,
         xds_port=settings.XDS_GRPC_PORT,
         als_port=settings.ALS_GRPC_PORT,
-        k8s_listen_nodeport=remote_bootstrap.REMOTE_K8S_LISTEN_NODEPORT,
-        k8s_admin_nodeport=remote_bootstrap.REMOTE_K8S_ADMIN_NODEPORT,
+        k8s_listen_nodeport=envoy_bootstrap.REMOTE_K8S_LISTEN_NODEPORT,
+        k8s_admin_nodeport=envoy_bootstrap.REMOTE_K8S_ADMIN_NODEPORT,
     )
 
 
@@ -611,24 +605,24 @@ async def manifests(
     docker-run script. All three embed this instance's node_id and the
     control plane's xDS/ALS endpoints — no further string substitution
     needed unless the operator wants to override the namespace / image."""
-    from app.services.envoy import remote_bootstrap
+    from app.services.envoy import bootstrap as envoy_bootstrap
     inst = await db.get(EnvoyInstance, inst_id)
     if not inst:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     if inst.mode != EnvoyMode.remote:
         raise HTTPException(status.HTTP_409_CONFLICT, "manifests are remote-only")
     try:
-        k8s_yaml = remote_bootstrap.render_k8s_manifest(inst)
+        k8s_yaml = envoy_bootstrap.render_k8s_manifest(inst)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return EnvoyManifestsOut(
-        bootstrap_yaml=remote_bootstrap.render_bootstrap_yaml(inst),
+        bootstrap_yaml=envoy_bootstrap.render_bootstrap_yaml(inst),
         k8s_yaml=k8s_yaml,
-        docker_run=remote_bootstrap.render_docker_run(inst),
+        docker_run=envoy_bootstrap.render_docker_run(inst),
         node_id=inst.node_id,
         control_plane_host=settings.CONTROL_PLANE_PUBLIC_HOST,
         xds_port=settings.XDS_GRPC_PORT,
         als_port=settings.ALS_GRPC_PORT,
-        k8s_listen_nodeport=remote_bootstrap.REMOTE_K8S_LISTEN_NODEPORT,
-        k8s_admin_nodeport=remote_bootstrap.REMOTE_K8S_ADMIN_NODEPORT,
+        k8s_listen_nodeport=envoy_bootstrap.REMOTE_K8S_LISTEN_NODEPORT,
+        k8s_admin_nodeport=envoy_bootstrap.REMOTE_K8S_ADMIN_NODEPORT,
     )

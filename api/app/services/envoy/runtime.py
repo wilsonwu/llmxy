@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import EnvoyInstance, EnvoyMode, EnvoyStatus
-from app.services.envoy import config as envoy_config
+from app.services.envoy import bootstrap as envoy_bootstrap, xds_server
 
 log = logging.getLogger(__name__)
 
@@ -129,8 +129,11 @@ async def start(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
             f"port {inst.listen_port} is already in use by another process",
         )
 
-    # 1. (re)write config so we boot off fresh files.
-    await envoy_config.write_all(db, inst)
+    # 1. (re)write bootstrap.yaml. CDS/LDS/RDS arrive via ADS — nothing else
+    # is written to disk.
+    os.makedirs(inst.config_dir, exist_ok=True)
+    with open(_bootstrap_path(inst), "w", encoding="utf-8") as bf:
+        bf.write(envoy_bootstrap.render_bootstrap_yaml(inst))
 
     inst.status = EnvoyStatus.starting
     inst.last_error = None
@@ -257,24 +260,15 @@ async def restart(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
 
 
 async def reload(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
-    """Reload config.
-
-    - local: rewrite YAML files; Envoy's watched_directory picks them up.
-    - remote: bump config_version, then nudge the ADS server to re-push to
-      the live stream for this node. If the remote envoy isn't connected
-      we still bump the version so the next stream open delivers the change.
-    """
-    if inst.mode == EnvoyMode.remote:
-        from app.services.envoy import xds_server
-        inst.config_version = (inst.config_version or 0) + 1
-        await db.commit()
-        xds_server.notify_node(inst.node_id)
-        return {"status": "pushed", "config_version": inst.config_version}
-    if inst.status != EnvoyStatus.running:
-        raise HTTPException(status.HTTP_409_CONFLICT, "instance not running")
-    version = await envoy_config.write_all(db, inst)
+    """Push config to this envoy via ADS. Mode-agnostic: both local and remote
+    consume CDS/LDS/RDS over the same ADS stream. We bump config_version so
+    operators see something moved, then nudge the ADS server. If the envoy
+    isn't currently connected, the bump still applies and the next stream
+    open delivers the change."""
+    inst.config_version = (inst.config_version or 0) + 1
     await db.commit()
-    return {"status": "reloaded", "config_version": version}
+    xds_server.notify_node(inst.node_id)
+    return {"status": "pushed", "config_version": inst.config_version}
 
 
 async def health(inst: EnvoyInstance) -> bool:
