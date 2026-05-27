@@ -9,6 +9,7 @@ check (dev mode).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -132,7 +133,16 @@ def _render_lds_remote(inst: EnvoyInstance) -> dict[str, Any]:
     public_host = settings.CONTROL_PLANE_PUBLIC_HOST or "127.0.0.1"
     public_port = settings.API_PORT
     lds = envoy_config.render_lds(inst)
+    # Force remote listeners onto the FIXED bind port baked into the manifest
+    # (containerPort). inst.listen_port for remote rows holds the externally
+    # reachable port the operator typed in (NodePort for k8s, host port for
+    # docker --network=host) — driving envoy's bind off of that would either
+    # collide with the manifest's containerPort or fail to bind entirely.
+    from app.services.envoy.remote_bootstrap import REMOTE_BIND_LISTEN_PORT
     for res in lds.get("resources", []):
+        sock = res.get("address", {}).get("socket_address")
+        if sock:
+            sock["port_value"] = REMOTE_BIND_LISTEN_PORT
         for fc in res.get("filter_chains", []):
             for f in fc.get("filters", []):
                 tc = f.get("typed_config", {})
@@ -281,49 +291,106 @@ class _ADSService(ads_pb2_grpc.AggregatedDiscoveryServiceServicer):
         _node_loops[node_id] = loop
         log.info("ads stream opened: node=%s peer=%s", node_id, context.peer())
 
+        # Per-type state. version is a content hash so identical resources
+        # ALWAYS produce identical version_info — envoy then ACKs without the
+        # "skipped N unmodified" churn. nonce is fresh per push to satisfy
+        # ADS protocol's request/response correlation.
         sent_version: dict[str, str] = {}
         sent_nonce: dict[str, str] = {}
         subscribed: set[str] = {first.type_url} if first.type_url else set()
+        # Types that need a fresh push (newly subscribed, or external notify).
+        # `None` sentinel = push all subscribed types (external notify / startup).
+        pending: set[str] = set(subscribed)
+
+        def _process_request(req) -> None:
+            """Classify a DiscoveryRequest. Only NEW subscriptions or NACKs
+            mark a type as pending — pure ACKs are no-ops (without this, every
+            ACK triggers a re-push which envoy re-ACKs forever)."""
+            type_url = req.type_url
+            if not type_url:
+                return
+            is_new_sub = type_url not in subscribed
+            subscribed.add(type_url)
+            has_error = bool(req.error_detail and req.error_detail.message)
+            if has_error:
+                log.warning(
+                    "ads NACK from %s for %s: %s",
+                    node_id, type_url, req.error_detail.message,
+                )
+                # NACK: envoy rejected last push. Drop sent_version so the
+                # next push (after operator fixes config) re-sends even if
+                # content unchanged.
+                sent_version.pop(type_url, None)
+                pending.add(type_url)
+                evt.set()
+                return
+            response_nonce = req.response_nonce or ""
+            last_nonce = sent_nonce.get(type_url, "")
+            if response_nonce and response_nonce == last_nonce:
+                # Pure ACK of our last push. No work.
+                return
+            if is_new_sub or not response_nonce:
+                pending.add(type_url)
+                evt.set()
 
         async def _reader():
             try:
                 async for req in request_iterator:
-                    type_url = req.type_url
-                    subscribed.add(type_url)
-                    if req.error_detail and req.error_detail.message:
-                        log.warning(
-                            "ads NACK from %s for %s: %s",
-                            node_id, type_url, req.error_detail.message,
-                        )
-                    evt.set()
+                    _process_request(req)
             except Exception as e:
                 log.info("ads reader for %s ended: %s", node_id, e)
 
         reader_task = asyncio.create_task(_reader())
 
+        def _hash(any_list) -> str:
+            h = hashlib.sha256()
+            for a in any_list:
+                h.update(a.SerializeToString(deterministic=True))
+            return h.hexdigest()[:16]
+
         try:
+            # Initial push: send everything subscribed in the first request.
+            pending = set(subscribed)
             evt.set()
             while True:
                 await evt.wait()
                 evt.clear()
                 if not subscribed:
                     continue
+                # External notify (notify_node) wakes us without populating
+                # `pending` — in that case push every subscribed type so the
+                # hash check below decides what's actually changed.
+                if not pending:
+                    pending = set(subscribed)
+                to_push = pending & subscribed
+                pending = set()
+                if not to_push:
+                    continue
                 resources_by_type = await _build_resources(node_id)
-                version = str(int(datetime.now(timezone.utc).timestamp()))
-                for type_url in list(subscribed):
+                latest_version: str | None = None
+                for type_url in list(to_push):
                     if type_url not in _TYPE_TO_PROTO:
+                        continue
+                    resources = resources_by_type.get(type_url, [])
+                    version = _hash(resources)
+                    if sent_version.get(type_url) == version:
+                        # Same content as last push for this type. Skip — envoy
+                        # is already in this state, sending again just creates
+                        # an ACK round-trip that wakes us again (the loop bug).
                         continue
                     nonce = uuid.uuid4().hex
                     sent_version[type_url] = version
                     sent_nonce[type_url] = nonce
+                    latest_version = version
                     resp = discovery_pb2.DiscoveryResponse(
                         version_info=version,
                         type_url=type_url,
                         nonce=nonce,
                     )
-                    resp.resources.extend(resources_by_type.get(type_url, []))
+                    resp.resources.extend(resources)
                     yield resp
-                await _touch_seen(node_id, version=version)
+                if latest_version is not None:
+                    await _touch_seen(node_id, version=latest_version)
         finally:
             reader_task.cancel()
             _node_events.pop(node_id, None)

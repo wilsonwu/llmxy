@@ -1,6 +1,6 @@
 "use client";
 import useSWR from "swr";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, fetcher } from "@/lib/api";
 
 type Mode = "local" | "remote";
@@ -28,17 +28,17 @@ type Inst = {
 type CreateForm = {
   name: string;
   mode: Mode;
+  host: string;
   listen_port: number;
   admin_port: number;
-  admin_url: string;
 };
 
 const emptyForm: CreateForm = {
   name: "",
   mode: "local",
+  host: "",
   listen_port: 9000,
   admin_port: 9001,
-  admin_url: "",
 };
 
 const statusColor: Record<Inst["status"], string> = {
@@ -99,43 +99,84 @@ export default function EnvoyPage() {
     refreshInterval: 5000,
   });
   const [creating, setCreating] = useState<CreateForm | null>(null);
-  const [editing, setEditing] = useState<{ id: number; mode: Mode; name: string; listen_port: number; admin_port: number; admin_url: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: number; mode: Mode; name: string; host: string; listen_port: number; admin_port: number } | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [openMenu, setOpenMenu] = useState<{ id: number; top: number; right: number } | null>(null);
-  const [drawer, setDrawer] = useState<{ inst: Inst; tab: "stats" | "logs" | "conn" | "bootstrap" } | null>(null);
+  const [drawer, setDrawer] = useState<{ inst: Inst; tab: "stats" | "logs" | "conn" | "deploy" } | null>(null);
   const [drawerData, setDrawerData] = useState<any>(null);
+  const [deploySubTab, setDeploySubTab] = useState<"k8s" | "docker" | "bootstrap">("k8s");
+  // For the create dialog: which deployment method the operator picked, and a
+  // popup window for inspecting the full YAML / command (kept separate from
+  // the existing `drawer` which is for already-created instances).
+  const [createDeployMethod, setCreateDeployMethod] = useState<"k8s" | "docker">("k8s");
+  const [yamlPopup, setYamlPopup] = useState<{ title: string; body: string } | null>(null);
+  // Inline preview of deploy manifests shown directly in the create dialog
+  // for remote mode. Refetches whenever name/ports change so the node_id and
+  // ports baked into the YAML always match what the create button will save.
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!creating || creating.mode !== "remote" || !creating.name) {
+      setPreviewData(null);
+      setPreviewError(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      setPreviewLoading(true);
+      setPreviewError(null);
+      try {
+        const r: any = await api("/api/v1/admin/envoy/manifests/preview", {
+          method: "POST",
+          body: JSON.stringify({ name: creating.name }),
+          signal: ctrl.signal,
+        });
+        setPreviewData(r);
+      } catch (e: any) {
+        if (e.name !== "AbortError") setPreviewError(e.message || "preview failed");
+      } finally {
+        setPreviewLoading(false);
+      }
+    }, 300);
+    return () => { ctrl.abort(); clearTimeout(t); };
+  }, [creating?.mode, creating?.name]);
 
   async function create() {
     if (!creating) return;
+    if (creating.mode === "remote" && !creating.host) {
+      alert("Host is required for remote mode. Deploy envoy first using the manifest below, then fill in the reachable address.");
+      return;
+    }
     const body: any = {
       name: creating.name,
       mode: creating.mode,
       listen_port: creating.listen_port,
+      admin_port: creating.admin_port,
     };
-    if (creating.mode === "local") {
-      body.admin_port = creating.admin_port;
-    } else {
-      body.admin_url = creating.admin_url;
-    }
+    if (creating.mode === "remote") body.host = creating.host;
     try {
       await api("/api/v1/admin/envoy/instances", { method: "POST", body: JSON.stringify(body) });
       setCreating(null);
       setTestResult(null);
-      mutate();
+      setPreviewData(null);
+      await mutate();
     } catch (e: any) {
       alert(e.message || "create failed");
     }
   }
 
   async function testConn() {
-    if (!creating?.admin_url) return;
+    if (!creating || creating.mode !== "remote" || !creating.host || !creating.admin_port) return;
     setTesting(true);
     setTestResult(null);
     try {
+      const admin_url = `http://${creating.host}:${creating.admin_port}`;
       const r: any = await api("/api/v1/admin/envoy/test-connection", {
         method: "POST",
-        body: JSON.stringify({ admin_url: creating.admin_url }),
+        body: JSON.stringify({ admin_url }),
       });
       setTestResult({
         ok: r.ok,
@@ -152,9 +193,8 @@ export default function EnvoyPage() {
 
   async function saveEdit() {
     if (!editing) return;
-    const body: any = { name: editing.name, listen_port: editing.listen_port };
-    if (editing.mode === "local") body.admin_port = editing.admin_port;
-    else body.admin_url = editing.admin_url;
+    const body: any = { name: editing.name, listen_port: editing.listen_port, admin_port: editing.admin_port };
+    if (editing.mode === "remote") body.host = editing.host;
     try {
       await api(`/api/v1/admin/envoy/instances/${editing.id}`, {
         method: "PATCH",
@@ -186,9 +226,10 @@ export default function EnvoyPage() {
     mutate();
   }
 
-  async function openDrawer(inst: Inst, tab: "stats" | "logs" | "conn" | "bootstrap") {
+  async function openDrawer(inst: Inst, tab: "stats" | "logs" | "conn" | "deploy") {
     setDrawer({ inst, tab });
     setDrawerData(null);
+    setDeploySubTab("k8s");
     try {
       if (tab === "stats") {
         setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/stats`));
@@ -197,7 +238,7 @@ export default function EnvoyPage() {
       } else if (tab === "conn") {
         setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/connection`));
       } else {
-        setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/bootstrap-template`));
+        setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/manifests`));
       }
     } catch (e: any) {
       setDrawerData({ error: e.message });
@@ -299,16 +340,23 @@ export default function EnvoyPage() {
                           {i.mode === "remote" && (
                             <>
                               <MenuItem onClick={() => { openDrawer(i, "conn"); setOpenMenu(null); }}>Connection</MenuItem>
-                              <MenuItem onClick={() => { openDrawer(i, "bootstrap"); setOpenMenu(null); }}>Bootstrap</MenuItem>
+                              <MenuItem onClick={() => { openDrawer(i, "deploy"); setOpenMenu(null); }}>Deploy manifests</MenuItem>
                             </>
                           )}
                           <div className="my-1 border-t" />
                           <MenuItem onClick={() => {
+                            // Prefill host from existing admin_url so remote edits
+                            // round-trip cleanly without forcing the operator to
+                            // retype the address.
+                            let host = "";
+                            if (i.admin_url) {
+                              try { host = new URL(i.admin_url).hostname; } catch { host = ""; }
+                            }
                             setEditing({
                               id: i.id, mode: i.mode, name: i.name,
+                              host,
                               listen_port: i.listen_port,
                               admin_port: i.admin_port || 0,
-                              admin_url: i.admin_url || "",
                             });
                             setOpenMenu(null);
                           }}>Edit</MenuItem>
@@ -329,14 +377,26 @@ export default function EnvoyPage() {
 
       {creating && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className="card w-[460px] space-y-3">
+          <div className={`card max-h-[90vh] space-y-3 overflow-auto ${creating.mode === "remote" ? "w-[720px]" : "w-[460px]"}`}>
             <h2 className="text-lg font-semibold">New envoy instance</h2>
             <div>
               <label className="label">Mode</label>
               <select
                 className="input w-full"
                 value={creating.mode}
-                onChange={(e) => setCreating({ ...creating, mode: e.target.value as Mode })}
+                onChange={(e) => {
+                  const newMode = e.target.value as Mode;
+                  // Defaults: local binds these ports directly on this host
+                  // (9000/9001). Remote: the form holds the EXTERNAL reachable
+                  // ports — for k8s the NodePort defaults to 30000/30001;
+                  // operator overrides if their deploy uses something else.
+                  setCreating({
+                    ...creating,
+                    mode: newMode,
+                    listen_port: newMode === "remote" ? 30000 : 9000,
+                    admin_port: newMode === "remote" ? 30001 : 9001,
+                  });
+                }}
               >
                 <option value="local">local — managed subprocess on this host</option>
                 <option value="remote">remote — envoy deployed elsewhere, connects via xDS</option>
@@ -350,7 +410,145 @@ export default function EnvoyPage() {
                 onChange={(e) => setCreating({ ...creating, name: e.target.value })}
                 placeholder="primary"
               />
+              {creating.mode === "remote" && (
+                <p className="mt-1 text-xs text-gray-500">
+                  node_id is derived as <code>llmxy-remote-{creating.name || "<name>"}</code> and baked into the manifest.
+                </p>
+              )}
             </div>
+
+            {creating.mode === "remote" && (
+              <>
+                <div>
+                  <label className="label">Deployment method</label>
+                  <div className="flex gap-2">
+                    {(["k8s", "docker"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setCreateDeployMethod(m)}
+                        className={`flex-1 rounded border px-3 py-2 text-sm ${
+                          createDeployMethod === m
+                            ? "border-blue-600 bg-blue-50 font-medium text-blue-700"
+                            : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                        }`}
+                      >
+                        {m === "k8s" ? "Kubernetes" : "Docker"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <div className="font-medium">
+                    Step 1 — deploy envoy via {createDeployMethod === "k8s" ? "Kubernetes" : "Docker"}
+                  </div>
+                  {!creating.name && (
+                    <p className="mt-2 text-xs">Enter a name above to generate the manifest.</p>
+                  )}
+                  {creating.name && previewLoading && <p className="mt-2 text-xs">Generating manifest…</p>}
+                  {previewError && <p className="mt-2 text-xs text-red-700">{previewError}</p>}
+                  {previewData && !previewError && (
+                    <>
+                      {createDeployMethod === "k8s" ? (
+                        <ol className="ml-5 mt-1 list-decimal space-y-0.5 text-xs">
+                          <li>Click <b>View YAML</b> below and copy the full manifest.</li>
+                          <li>Apply it: <code>kubectl apply -f -</code> (paste, then Ctrl-D).</li>
+                          <li>Wait for the pod to be ready. It will dial xDS at{" "}
+                            <code>{previewData.control_plane_host}:{previewData.xds_port}</code>{" "}
+                            and ALS at <code>:{previewData.als_port}</code>.</li>
+                          <li>
+                            The Service exposes envoy as NodePort{" "}
+                            <b>{previewData.k8s_listen_nodeport}</b> (listen) /{" "}
+                            <b>{previewData.k8s_admin_nodeport}</b> (admin) — those are the
+                            external ports clients outside the cluster hit. Fill them into
+                            the <b>Listen / Admin port</b> fields below (pre-filled by
+                            default), along with the node IP or Ingress hostname as <b>Host</b>.
+                            If your deploy maps NodePort differently, type the actual values.
+                          </li>
+                        </ol>
+                      ) : (
+                        <ol className="ml-5 mt-1 list-decimal space-y-0.5 text-xs">
+                          <li>Click <b>View command</b> below and copy the shell snippet.</li>
+                          <li>Run it on the host where envoy should live (writes bootstrap.yaml then <code>docker run</code>).</li>
+                          <li>Envoy will dial xDS at{" "}
+                            <code>{previewData.control_plane_host}:{previewData.xds_port}</code>{" "}
+                            and ALS at <code>:{previewData.als_port}</code>.</li>
+                          <li>
+                            With <code>--network=host</code>, envoy is reachable on the docker
+                            host at <b>9000</b> (listen) / <b>9001</b> (admin) — fill those
+                            into the port fields below along with the host's LAN IP / hostname.
+                          </li>
+                        </ol>
+                      )}
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <div className="text-xs">
+                          node_id: <code>{previewData.node_id}</code>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="btn-outline"
+                            onClick={() => setYamlPopup({
+                              title: createDeployMethod === "k8s"
+                                ? "Kubernetes manifest (kubectl apply -f -)"
+                                : "Docker run script",
+                              body: createDeployMethod === "k8s" ? previewData.k8s_yaml : previewData.docker_run,
+                            })}
+                          >
+                            {createDeployMethod === "k8s" ? "View YAML" : "View command"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-outline"
+                            onClick={() => {
+                              const text = createDeployMethod === "k8s" ? previewData.k8s_yaml : previewData.docker_run;
+                              navigator.clipboard.writeText(text);
+                            }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <div className="font-medium">Step 2 — register the reachable address</div>
+                  <p className="mt-1 text-xs">
+                    Once envoy is up, paste where it's reachable. Submitting probes <code>/ready</code> and flips status to <b>online</b>.
+                  </p>
+                </div>
+                <div>
+                  <label className="label">Host <span className="text-xs text-red-600">(required)</span></label>
+                  <div className="flex gap-2">
+                    <input
+                      className="input flex-1"
+                      value={creating.host}
+                      onChange={(e) => {
+                        setCreating({ ...creating, host: e.target.value });
+                        setTestResult(null);
+                      }}
+                      placeholder="envoy.example.com or 10.0.0.5"
+                    />
+                    <button
+                      className="btn-outline whitespace-nowrap"
+                      onClick={testConn}
+                      disabled={!creating.host || !creating.admin_port || testing}
+                    >
+                      {testing ? "Testing…" : "Test"}
+                    </button>
+                  </div>
+                  {testResult && (
+                    <p className={`mt-1 text-xs ${testResult.ok ? "text-green-700" : "text-red-600"}`}>
+                      {testResult.ok ? "✓ " : "✗ "}{testResult.msg}
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
             <div className="flex gap-3">
               <div className="flex-1">
                 <label className="label">Listen port</label>
@@ -361,65 +559,67 @@ export default function EnvoyPage() {
                   onChange={(e) => setCreating({ ...creating, listen_port: +e.target.value })}
                 />
               </div>
-              {creating.mode === "local" && (
-                <div className="flex-1">
-                  <label className="label">Admin port</label>
-                  <input
-                    type="number"
-                    className="input w-full"
-                    value={creating.admin_port}
-                    onChange={(e) => setCreating({ ...creating, admin_port: +e.target.value })}
-                  />
-                </div>
-              )}
+              <div className="flex-1">
+                <label className="label">Admin port</label>
+                <input
+                  type="number"
+                  className="input w-full"
+                  value={creating.admin_port}
+                  onChange={(e) => {
+                    setCreating({ ...creating, admin_port: +e.target.value });
+                    setTestResult(null);
+                  }}
+                />
+              </div>
             </div>
             {creating.mode === "remote" && (
-              <div>
-                <label className="label">Admin URL</label>
-                <div className="flex gap-2">
-                  <input
-                    className="input flex-1"
-                    value={creating.admin_url}
-                    onChange={(e) => {
-                      setCreating({ ...creating, admin_url: e.target.value });
-                      setTestResult(null);
-                    }}
-                    placeholder="http://envoy.example.com:9901"
-                  />
-                  <button
-                    className="btn-outline whitespace-nowrap"
-                    onClick={testConn}
-                    disabled={!creating.admin_url || testing}
-                  >
-                    {testing ? "Testing…" : "Test"}
-                  </button>
-                </div>
-                {testResult && (
-                  <p className={`mt-1 text-xs ${testResult.ok ? "text-green-700" : "text-red-600"}`}>
-                    {testResult.ok ? "✓ " : "✗ "}{testResult.msg}
-                  </p>
-                )}
-                <p className="mt-1 text-xs text-gray-500">
-                  How the control plane reaches this envoy's admin API (for stats / readiness).
-                  Use Test to verify connectivity; saving is allowed even if the probe fails.
-                </p>
-              </div>
+              <p className="text-xs text-gray-500">
+                Externally reachable ports — what clients OUTSIDE the cluster / host hit.
+                For Kubernetes the manifest's Service exposes NodePort 30000 (listen) /
+                30001 (admin); for <code>docker --network=host</code>, envoy binds 9000 / 9001
+                directly on the host. If your deploy maps to different external ports
+                (custom NodePort, ingress, port-mapping), type those instead.
+              </p>
             )}
-            <p className="text-xs text-gray-500">
-              {creating.mode === "local"
-                ? "Created in stopped state. Click Start to spawn the envoy subprocess."
-                : "After creating, click Bootstrap to copy the envoy bootstrap.yaml, paste it onto your envoy host, and run `envoy -c bootstrap.yaml`."}
-            </p>
+
+            {creating.mode === "local" && (
+              <p className="text-xs text-gray-500">
+                Created in stopped state. Click Start to spawn the envoy subprocess.
+              </p>
+            )}
+
             <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => { setCreating(null); setTestResult(null); }}>Cancel</button>
+              <button className="btn-outline" onClick={() => { setCreating(null); setTestResult(null); setPreviewData(null); }}>Cancel</button>
               <button
                 className="btn-primary"
                 onClick={create}
-                disabled={!creating.name || (creating.mode === "remote" && !creating.admin_url)}
+                disabled={!creating.name || (creating.mode === "remote" && !creating.host)}
               >
                 Create
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {yamlPopup && (
+        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40" onClick={() => setYamlPopup(null)}>
+          <div className="card max-h-[85vh] w-[860px] space-y-3 overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">{yamlPopup.title}</h2>
+              <div className="space-x-2">
+                <button
+                  className="btn-outline"
+                  onClick={() => navigator.clipboard.writeText(yamlPopup.body)}
+                >
+                  Copy
+                </button>
+                <button className="btn-outline" onClick={() => setYamlPopup(null)}>Close</button>
+              </div>
+            </div>
+            <pre className="max-h-[70vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
+              {yamlPopup.body}
+            </pre>
           </div>
         </div>
       )}
@@ -441,6 +641,21 @@ export default function EnvoyPage() {
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}
               />
             </div>
+            {editing.mode === "remote" && (
+              <div>
+                <label className="label">Host</label>
+                <input
+                  className="input w-full"
+                  value={editing.host}
+                  onChange={(e) => setEditing({ ...editing, host: e.target.value })}
+                  placeholder="envoy.example.com or 10.0.0.5"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Admin URL will be <code>http://{editing.host || "host"}:{editing.admin_port}</code>.
+                  Saving re-probes /ready and updates status immediately.
+                </p>
+              </div>
+            )}
             <div className="flex gap-3">
               <div className="flex-1">
                 <label className="label">Listen port</label>
@@ -451,32 +666,16 @@ export default function EnvoyPage() {
                   onChange={(e) => setEditing({ ...editing, listen_port: +e.target.value })}
                 />
               </div>
-              {editing.mode === "local" && (
-                <div className="flex-1">
-                  <label className="label">Admin port</label>
-                  <input
-                    type="number"
-                    className="input w-full"
-                    value={editing.admin_port}
-                    onChange={(e) => setEditing({ ...editing, admin_port: +e.target.value })}
-                  />
-                </div>
-              )}
-            </div>
-            {editing.mode === "remote" && (
-              <div>
-                <label className="label">Admin URL</label>
+              <div className="flex-1">
+                <label className="label">Admin port</label>
                 <input
+                  type="number"
                   className="input w-full"
-                  value={editing.admin_url}
-                  onChange={(e) => setEditing({ ...editing, admin_url: e.target.value })}
-                  placeholder="http://envoy.example.com:9901"
+                  value={editing.admin_port}
+                  onChange={(e) => setEditing({ ...editing, admin_port: +e.target.value })}
                 />
-                <p className="mt-1 text-xs text-gray-500">
-                  Saving re-probes /ready and updates status immediately.
-                </p>
               </div>
-            )}
+            </div>
             {editing.mode === "local" && (
               <p className="text-xs text-amber-700">
                 Port changes only take effect after restart.
@@ -498,12 +697,18 @@ export default function EnvoyPage() {
                 {drawer.inst.name} — {drawer.tab}
               </h2>
               <div className="space-x-2">
-                {drawer.tab === "bootstrap" && drawerData?.yaml && (
+                {drawer.tab === "deploy" && drawerData && !drawerData.error && (
                   <button
                     className="btn-outline"
-                    onClick={() => navigator.clipboard.writeText(drawerData.yaml)}
+                    onClick={() => {
+                      const text =
+                        deploySubTab === "k8s" ? drawerData.k8s_yaml
+                        : deploySubTab === "docker" ? drawerData.docker_run
+                        : drawerData.bootstrap_yaml;
+                      navigator.clipboard.writeText(text);
+                    }}
                   >
-                    Copy
+                    Copy {deploySubTab}
                   </button>
                 )}
                 <button className="btn-outline" onClick={() => setDrawer(null)}>Close</button>
@@ -538,14 +743,40 @@ export default function EnvoyPage() {
                 </tbody>
               </table>
             )}
-            {drawer.tab === "bootstrap" && drawerData?.yaml && (
+            {drawer.tab === "deploy" && drawerData && !drawerData.error && (
               <>
-                <p className="text-sm text-gray-600">
-                  Save this as <code>bootstrap.yaml</code> on your envoy host, then run{" "}
-                  <code>envoy -c bootstrap.yaml</code>. The node will appear online here once it connects.
-                </p>
-                <pre className="max-h-[60vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
-                  {drawerData.yaml}
+                <div className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <div className="font-medium">Quick start</div>
+                  <ol className="ml-5 mt-1 list-decimal space-y-0.5 text-xs">
+                    <li>Copy the manifest below and <code>kubectl apply -f -</code> (or run the docker command).</li>
+                    <li>Wait for the pod / container to be ready — envoy will dial xDS at{" "}
+                      <code>{drawerData.control_plane_host}:{drawerData.xds_port}</code> and ALS at{" "}
+                      <code>:{drawerData.als_port}</code>.</li>
+                    <li>
+                      Edit this instance and set <b>Host</b> to where the envoy is reachable
+                      (NodePort host IP, Service IP, or Ingress hostname). Status flips to <b>online</b> once
+                      it streams its first request.
+                    </li>
+                  </ol>
+                  <div className="mt-2 text-xs">
+                    node_id: <code>{drawerData.node_id}</code> · listen :{drawer.inst.listen_port} · admin :{drawer.inst.admin_port || 9901}
+                  </div>
+                </div>
+                <div className="flex gap-1 border-b text-sm">
+                  {(["k8s", "docker", "bootstrap"] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setDeploySubTab(t)}
+                      className={`px-3 py-1.5 ${deploySubTab === t ? "border-b-2 border-blue-600 font-medium text-blue-700" : "text-gray-600"}`}
+                    >
+                      {t === "k8s" ? "Kubernetes" : t === "docker" ? "Docker" : "bootstrap.yaml"}
+                    </button>
+                  ))}
+                </div>
+                <pre className="max-h-[55vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
+                  {deploySubTab === "k8s" ? drawerData.k8s_yaml
+                    : deploySubTab === "docker" ? drawerData.docker_run
+                    : drawerData.bootstrap_yaml}
                 </pre>
               </>
             )}

@@ -312,10 +312,12 @@ class EnvoyInstanceIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     mode: str = Field(default="local", pattern="^(local|remote)$")
     listen_port: int = Field(ge=1024, le=65535)
-    # admin_port is required for local mode and ignored for remote.
     admin_port: Optional[int] = Field(default=None, ge=1024, le=65535)
-    # admin_url: required for remote (operator-supplied — how the control
-    # plane reaches envoy's admin API). For local mode it's auto-derived.
+    # Remote mode: operator supplies `host` (hostname or IP — no scheme, no
+    # port) + `admin_port`; server derives admin_url = http://{host}:{admin_port}.
+    # `admin_url` kept for back-compat with older clients that still send it
+    # directly; ignored when `host` is also provided.
+    host: Optional[str] = Field(default=None, max_length=255)
     admin_url: Optional[str] = Field(default=None, max_length=512)
 
 
@@ -325,6 +327,7 @@ class EnvoyInstanceUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=64)
     listen_port: Optional[int] = Field(default=None, ge=1024, le=65535)
     admin_port: Optional[int] = Field(default=None, ge=1024, le=65535)
+    host: Optional[str] = Field(default=None, max_length=255)
     admin_url: Optional[str] = Field(default=None, max_length=512)
 
 
@@ -351,10 +354,10 @@ class EnvoyInstanceOut(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def proxy_url(self) -> str:
-        """Where clients point /v1/* traffic. For local mode this is exact; for
-        remote it derives the host from admin_url and assumes the proxy listens
-        on listen_port on the same host (override admin_url's port). If admin_url
-        is not set or unparseable, falls back to listen_port-only display."""
+        """Where clients point /v1/* traffic. For both modes listen_port is
+        already the externally reachable port — local binds directly; remote
+        gets the operator-supplied value (NodePort for k8s, host port for
+        docker --network=host) post-deploy. No translation needed."""
         if self.mode == "local":
             return f"http://127.0.0.1:{self.listen_port}"
         if self.admin_url:
@@ -379,6 +382,34 @@ class EnvoyConnectionOut(BaseModel):
 
 class EnvoyBootstrapOut(BaseModel):
     yaml: str
+
+
+class EnvoyManifestsOut(BaseModel):
+    bootstrap_yaml: str
+    k8s_yaml: str
+    docker_run: str
+    node_id: str
+    control_plane_host: str
+    xds_port: int
+    als_port: int
+    # NodePort values used in the k8s manifest. Distinct from the envoy bind
+    # ports (which stay at whatever the operator configured) because k8s
+    # requires NodePort be in 30000-32767. Surfaced so the UI can tell the
+    # operator which external port to connect on.
+    k8s_listen_nodeport: int
+    k8s_admin_nodeport: int
+
+
+class EnvoyManifestsPreviewIn(BaseModel):
+    # Used by the create dialog to render deploy artifacts BEFORE persisting
+    # the row, so the operator can deploy first and then come back with the
+    # real host:port. The server derives node_id deterministically from name
+    # (same rule as create), so the manifest copied here matches the one
+    # eventually stored against this instance. Ports are NOT taken from the
+    # caller — the manifest uses fixed envoy/NodePort constants so deploys
+    # are uniform; the form's port fields are filled in post-deploy with the
+    # actual reachable values.
+    name: str = Field(min_length=1, max_length=64)
 
 
 class EnvoyTestConnIn(BaseModel):

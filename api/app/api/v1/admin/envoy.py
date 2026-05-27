@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,6 +19,8 @@ from app.schemas import (
     EnvoyInstanceIn,
     EnvoyInstanceOut,
     EnvoyInstanceUpdate,
+    EnvoyManifestsOut,
+    EnvoyManifestsPreviewIn,
     EnvoyTestConnIn,
     EnvoyTestConnOut,
 )
@@ -48,18 +49,36 @@ def _ensure_local(inst: EnvoyInstance) -> None:
         )
 
 
-async def _probe_admin(url: str) -> str | None:
-    """Best-effort probe of envoy admin `/ready`. Returns None on success,
-    a short human-readable error otherwise."""
-    target = url.rstrip("/") + "/ready"
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get(target)
-        if r.status_code == 200:
-            return None
-        return f"admin probe HTTP {r.status_code}"
-    except Exception as e:
-        return f"admin unreachable: {e}"
+def _normalize_host(raw: str) -> str:
+    """Accept `host`, `host:port`, or `scheme://host[:port][/...]` and return
+    just the hostname/IP. We then build admin_url from host + admin_port
+    ourselves — operators shouldn't have to remember the URL shape."""
+    s = raw.strip()
+    if "://" in s:
+        from urllib.parse import urlparse
+        u = urlparse(s)
+        return u.hostname or s
+    # bare `host:port`
+    if s.count(":") == 1 and not s.startswith("["):
+        return s.split(":", 1)[0]
+    return s
+
+
+def _build_remote_admin_url(host: str | None, admin_port: int | None, fallback: str | None) -> str | None:
+    """Resolve the EXTERNAL admin_url for a remote instance (the URL the
+    control plane probes /ready against).
+
+    `admin_port` here is the externally-reachable admin port the operator
+    typed into the form AFTER deploying envoy — already the NodePort for k8s
+    (30001) or the host port for docker --network=host (9001). No derivation
+    or translation: we just join host:port. Explicit `admin_url` fallback
+    wins for unusual setups (e.g. ingress-fronted access).
+    """
+    if fallback:
+        return fallback.strip()
+    if host and admin_port:
+        return f"http://{_normalize_host(host)}:{admin_port}"
+    return None
 
 
 @router.post("/test-connection", response_model=EnvoyTestConnOut)
@@ -118,11 +137,23 @@ async def create_instance(
                 "Install envoy (e.g. `brew install envoy`) or set ENVOY_BIN to an absolute path in .env.",
             )
     else:
-        if not req.admin_url:
+        # Remote: require host + admin_port. The expected flow is: operator
+        # opens the create dialog → picks remote → UI shows deploy manifests
+        # via /manifests/preview (with deterministic node_id derived from
+        # name) → operator deploys → fills in the real host:port → submits.
+        # Without a host we can't probe /ready, and the row would show
+        # offline/error indefinitely, which is worse than refusing.
+        if req.admin_port is None:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                "admin_url required for remote mode (e.g. http://envoy.example.com:9901)",
+                "admin_port required for remote mode (envoy's admin /ready port)",
             )
+        if not (req.host or req.admin_url):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "host required for remote mode — deploy envoy first, then submit with its reachable host",
+            )
+        admin_url = _build_remote_admin_url(req.host, req.admin_port, req.admin_url)
 
     # Port uniqueness only matters for local mode (those ports bind on this
     # host). For remote, listen_port is on the remote envoy host — many remote
@@ -174,16 +205,19 @@ async def create_instance(
         inst = EnvoyInstance(
             name=req.name,
             mode=mode,
-            node_id=f"llmxy-remote-{uuid.uuid4().hex[:8]}",
+            node_id=f"llmxy-remote-{req.name}",
             listen_port=req.listen_port,
-            admin_port=None,
-            admin_url=req.admin_url,
+            # Persist admin_port for remote too — the bootstrap template uses
+            # it so the envoy admin endpoint inside the pod matches what the
+            # control plane probes.
+            admin_port=req.admin_port,
+            admin_url=admin_url,
             status=EnvoyStatus.stopped,
             config_dir=None,
             log_dir=None,
         )
 
-    if mode == EnvoyMode.remote:
+    if mode == EnvoyMode.remote and admin_url:
         # One-shot health probe so the row reflects reachability immediately
         # instead of waiting for the next health-loop tick (which only picks up
         # rows already in running/error). Failure is non-fatal — the operator
@@ -282,8 +316,36 @@ async def update_instance(
     else:
         if req.listen_port is not None:
             inst.listen_port = req.listen_port
-        if req.admin_url is not None:
-            inst.admin_url = req.admin_url
+        # For remote, recompute admin_url if any of host / admin_port / admin_url
+        # changed. host+admin_port is the preferred input; admin_url stays for
+        # back-compat with older clients.
+        host_changed = req.host is not None
+        port_changed = req.admin_port is not None
+        url_changed = req.admin_url is not None
+        if host_changed or port_changed or url_changed:
+            # Derive new admin_url from whatever the caller supplied, falling
+            # back to existing fields so partial updates work.
+            new_host = req.host if host_changed else None
+            new_port = req.admin_port if port_changed else inst.admin_port
+            new_url = req.admin_url if url_changed else None
+            # If only host or only admin_port supplied, pair with the existing
+            # counterpart so we can still build host:port.
+            if host_changed and not port_changed and inst.admin_port:
+                new_port = inst.admin_port
+            if port_changed and not host_changed and inst.admin_url:
+                from urllib.parse import urlparse
+                u = urlparse(inst.admin_url)
+                if u.hostname:
+                    new_host = u.hostname
+            derived = _build_remote_admin_url(new_host, new_port, new_url)
+            if not derived:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "remote mode requires `host` + `admin_port` to update connection info",
+                )
+            inst.admin_url = derived
+            if port_changed:
+                inst.admin_port = req.admin_port
             # Re-probe so the operator sees the new URL's reachability right
             # away instead of waiting for the next health-loop tick.
             from datetime import datetime, timezone
@@ -501,3 +563,72 @@ async def bootstrap_template(
     if inst.mode != EnvoyMode.remote:
         raise HTTPException(status.HTTP_409_CONFLICT, "bootstrap templates are remote-only")
     return EnvoyBootstrapOut(yaml=remote_bootstrap.render_bootstrap_yaml(inst))
+
+
+@router.post("/manifests/preview", response_model=EnvoyManifestsOut)
+async def manifests_preview(
+    req: EnvoyManifestsPreviewIn,
+    _: User = Depends(require_admin),
+):
+    """Render deploy artifacts for a not-yet-created remote instance. Only
+    `name` is meaningful — node_id is derived from it with the same rule the
+    POST /instances handler uses, so the manifest the operator deploys here
+    matches the row that will be persisted on create. Ports in the manifest
+    are FIXED (envoy standards 9000/9001 + NodePort 30000/30001) and never
+    sourced from form input; the form's listen/admin port fields are filled
+    in LATER by the operator with the real reachable values."""
+    from app.services.envoy import remote_bootstrap
+    transient = EnvoyInstance(
+        name=req.name,
+        mode=EnvoyMode.remote,
+        node_id=f"llmxy-remote-{req.name}",
+        listen_port=remote_bootstrap.REMOTE_BIND_LISTEN_PORT,
+        admin_port=remote_bootstrap.REMOTE_BIND_ADMIN_PORT,
+        status=EnvoyStatus.stopped,
+    )
+    k8s_yaml = remote_bootstrap.render_k8s_manifest(transient)
+    return EnvoyManifestsOut(
+        bootstrap_yaml=remote_bootstrap.render_bootstrap_yaml(transient),
+        k8s_yaml=k8s_yaml,
+        docker_run=remote_bootstrap.render_docker_run(transient),
+        node_id=transient.node_id,
+        control_plane_host=settings.CONTROL_PLANE_PUBLIC_HOST,
+        xds_port=settings.XDS_GRPC_PORT,
+        als_port=settings.ALS_GRPC_PORT,
+        k8s_listen_nodeport=remote_bootstrap.REMOTE_K8S_LISTEN_NODEPORT,
+        k8s_admin_nodeport=remote_bootstrap.REMOTE_K8S_ADMIN_NODEPORT,
+    )
+
+
+@router.get("/instances/{inst_id}/manifests", response_model=EnvoyManifestsOut)
+async def manifests(
+    inst_id: int,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bundle of deploy artifacts for a remote instance: bootstrap.yaml, a
+    `kubectl apply -f` manifest (ConfigMap + Deployment + Service), and a
+    docker-run script. All three embed this instance's node_id and the
+    control plane's xDS/ALS endpoints — no further string substitution
+    needed unless the operator wants to override the namespace / image."""
+    from app.services.envoy import remote_bootstrap
+    inst = await db.get(EnvoyInstance, inst_id)
+    if not inst:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    if inst.mode != EnvoyMode.remote:
+        raise HTTPException(status.HTTP_409_CONFLICT, "manifests are remote-only")
+    try:
+        k8s_yaml = remote_bootstrap.render_k8s_manifest(inst)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    return EnvoyManifestsOut(
+        bootstrap_yaml=remote_bootstrap.render_bootstrap_yaml(inst),
+        k8s_yaml=k8s_yaml,
+        docker_run=remote_bootstrap.render_docker_run(inst),
+        node_id=inst.node_id,
+        control_plane_host=settings.CONTROL_PLANE_PUBLIC_HOST,
+        xds_port=settings.XDS_GRPC_PORT,
+        als_port=settings.ALS_GRPC_PORT,
+        k8s_listen_nodeport=remote_bootstrap.REMOTE_K8S_LISTEN_NODEPORT,
+        k8s_admin_nodeport=remote_bootstrap.REMOTE_K8S_ADMIN_NODEPORT,
+    )
