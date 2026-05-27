@@ -5,6 +5,12 @@ import { fetcher } from "@/lib/api";
 
 type Model = { id: string; strategy: string; target_count: number };
 type Key = { id: number; name: string; key_prefix: string; status: string };
+type EnvoyInst = { name: string; mode: string; listen_port: number; proxy_url: string };
+type Transport = {
+  direct: { available: boolean };
+  envoy: { available: boolean; instances: EnvoyInst[] };
+};
+type Gateway = { id: string; label: string; url: string; hint?: string };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -78,12 +84,35 @@ ${stream ? "for chunk in res:\n    print(chunk.choices[0].delta.content or '', e
 export default function ModelsPage() {
   const { data: models } = useSWR<Model[]>("/api/v1/models", fetcher);
   const { data: keys } = useSWR<Key[]>("/api/v1/api-keys", fetcher);
+  const { data: transport } = useSWR<Transport>("/api/v1/relay/transport", fetcher, {
+    refreshInterval: 15_000,
+  });
 
   const [model, setModel] = useState<string>("");
   const [keyId, setKeyId] = useState<string>("");
   const [tab, setTab] = useState<Tab>("chat");
   const [lang, setLang] = useState<"curl" | "js" | "py">("curl");
   const [copied, setCopied] = useState(false);
+  const [gatewayId, setGatewayId] = useState<string>("default");
+
+  const gateways: Gateway[] = useMemo(() => {
+    const list: Gateway[] = [
+      { id: "default", label: "Default API", url: API_BASE, hint: "always available" },
+    ];
+    for (const inst of transport?.envoy.instances || []) {
+      list.push({
+        id: `envoy-${inst.name}`,
+        label: `${inst.name} (${inst.mode})`,
+        url: inst.proxy_url,
+        hint: inst.mode === "local" ? "envoy on this host" : "remote envoy",
+      });
+    }
+    return list;
+  }, [transport]);
+
+  const activeGateway =
+    gateways.find((g) => g.id === gatewayId) || gateways[0];
+  const activeBase = activeGateway?.url || API_BASE;
 
   const activeModel = model || models?.[0]?.id || "<model-name>";
   const activeKey = useMemo(() => {
@@ -93,10 +122,10 @@ export default function ModelsPage() {
   }, [keys, keyId]);
 
   const snippet = useMemo(() => {
-    if (lang === "js") return buildJs(tab, API_BASE, activeKey, activeModel);
-    if (lang === "py") return buildPy(tab, API_BASE, activeKey, activeModel);
-    return buildCurl(tab, API_BASE, activeKey, activeModel);
-  }, [lang, tab, activeKey, activeModel]);
+    if (lang === "js") return buildJs(tab, activeBase, activeKey, activeModel);
+    if (lang === "py") return buildPy(tab, activeBase, activeKey, activeModel);
+    return buildCurl(tab, activeBase, activeKey, activeModel);
+  }, [lang, tab, activeBase, activeKey, activeModel]);
 
   const isEmbeddingModel = (id: string) => /embed/i.test(id);
   const filteredTabs: Tab[] = isEmbeddingModel(activeModel)
@@ -159,6 +188,18 @@ export default function ModelsPage() {
           <div className="text-sm font-semibold">Try it</div>
           <select
             className="input w-auto"
+            value={gatewayId}
+            onChange={(e) => setGatewayId(e.target.value)}
+            title="Pick which gateway to route through"
+          >
+            {gateways.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.label} — {g.url}
+              </option>
+            ))}
+          </select>
+          <select
+            className="input w-auto"
             value={keyId}
             onChange={(e) => setKeyId(e.target.value)}
           >
@@ -203,7 +244,10 @@ export default function ModelsPage() {
         <pre className="overflow-x-auto rounded bg-gray-900 p-4 text-sm text-gray-100">{snippet}</pre>
 
         <p className="text-xs text-gray-500">
-          Base URL: <code>{API_BASE}/v1</code> · Model: <code>{activeModel}</code>
+          Base URL: <code>{activeBase}/v1</code> · Model: <code>{activeModel}</code>
+          {activeGateway?.hint && (
+            <span className="ml-1 text-gray-400">({activeGateway.hint})</span>
+          )}
         </p>
       </div>
     </div>
