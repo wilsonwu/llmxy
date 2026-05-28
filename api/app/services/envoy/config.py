@@ -328,6 +328,15 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
         # and other IP-based logic in ext_authz see the real client. Without
         # this, ext_authz only ever sees envoy as the peer.
         "use_remote_address": True,
+        # Explicit migration step for envoy >=1.32: without this, envoy logs
+        # a startup warning that the default "trust RFC1918" behaviour will
+        # change. We trust nothing — clients hit envoy directly, so anything
+        # claiming to be internal would be a spoof. With use_remote_address=true
+        # the real client IP is still recovered correctly.
+        "internal_address_config": {
+            "unix_sockets": False,
+            "cidr_ranges": [],
+        },
         "rds": {
             "route_config_name": "llmxy_routes",
             "config_source": rds_config_source,
@@ -338,7 +347,17 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                 "@type": "type.googleapis.com/envoy.extensions.access_loggers.grpc.v3.HttpGrpcAccessLogConfig",
                 "common_config": {
                     "log_name": "llmxy_relay",
-                    "grpc_service": {"envoy_grpc": {"cluster_name": "als_cluster"}},
+                    "grpc_service": {
+                        "envoy_grpc": {"cluster_name": "als_cluster"},
+                        # Same shared static token as xDS. Required when
+                        # XDS_AUTH_TOKEN is set on the control plane —
+                        # without it, ALS aborts with UNAUTHENTICATED and
+                        # access logs (including billing usage) silently
+                        # never reach _stream_handler.
+                        **({"initial_metadata": [
+                            {"key": "x-llmxy-token", "value": settings.XDS_AUTH_TOKEN}
+                        ]} if settings.XDS_AUTH_TOKEN else {}),
+                    },
                     "transport_api_version": "V3",
                 },
                 "additional_request_headers_to_log": [
@@ -365,17 +384,6 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                             "timeout": settings.ENVOY_EXT_AUTHZ_TIMEOUT,
                         },
                         "path_prefix": "/internal/relay/authz",
-                        "authorization_request": {
-                            "allowed_headers": {
-                                "patterns": [
-                                    {"exact": "authorization"},
-                                    {"exact": "content-type"},
-                                    {"exact": "x-request-id"},
-                                    {"exact": "x-forwarded-for"},
-                                    {"exact": "x-real-ip"},
-                                ]
-                            },
-                        },
                         "authorization_response": {
                             "allowed_upstream_headers": {
                                 "patterns": [
@@ -386,6 +394,20 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                                 ]
                             },
                         },
+                    },
+                    # `AuthorizationRequest.allowed_headers` was deprecated in
+                    # envoy 1.32 in favour of the top-level
+                    # `ExtAuthz.allowed_headers`. Same semantics: filters which
+                    # downstream request headers are forwarded to the authz
+                    # service.
+                    "allowed_headers": {
+                        "patterns": [
+                            {"exact": "authorization"},
+                            {"exact": "content-type"},
+                            {"exact": "x-request-id"},
+                            {"exact": "x-forwarded-for"},
+                            {"exact": "x-real-ip"},
+                        ]
                     },
                     "with_request_body": {
                         "max_request_bytes": settings.ENVOY_EXT_AUTHZ_MAX_BYTES,
@@ -404,7 +426,10 @@ def render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                 "name": "envoy.filters.http.lua",
                 "typed_config": {
                     "@type": "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua",
-                    "inline_code": USAGE_LUA,
+                    # `inline_code` was deprecated in envoy 1.30+ in favour of
+                    # `default_source_code` (a DataSource). Same effect, new wire
+                    # shape — silences the startup deprecation warning.
+                    "default_source_code": {"inline_string": USAGE_LUA},
                 },
             },
             {

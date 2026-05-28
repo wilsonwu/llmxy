@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
+import subprocess
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +21,8 @@ from app.schemas import (
     EnvoyInstanceIn,
     EnvoyInstanceOut,
     EnvoyInstanceUpdate,
+    EnvoyInstallStep,
+    EnvoyLocalPrecheckOut,
     EnvoyManifestsOut,
     EnvoyManifestsPreviewIn,
     EnvoyTestConnIn,
@@ -39,6 +43,168 @@ def _resolve_envoy_bin() -> str | None:
     if os.path.isabs(bin_setting):
         return bin_setting if os.path.isfile(bin_setting) and os.access(bin_setting, os.X_OK) else None
     return shutil.which(bin_setting)
+
+
+def _envoy_version(path: str) -> str | None:
+    try:
+        r = subprocess.run(
+            [path, "--version"], capture_output=True, text=True, timeout=3,
+        )
+        out = (r.stdout or r.stderr or "").strip().splitlines()
+        return out[0] if out else None
+    except Exception:
+        return None
+
+
+def _install_steps_for(os_name: str) -> tuple[str | None, list[EnvoyInstallStep]]:
+    """Return (one-line hint, copy-pasteable steps) for installing envoy on
+    the api host. Used both by the precheck endpoint and to enrich the 400
+    raised from POST /instances when the binary isn't found.
+    """
+    if os_name == "darwin":
+        return (
+            "Install envoy via Homebrew, then retry.",
+            [
+                EnvoyInstallStep(label="Install envoy (Homebrew)", command="brew install envoy"),
+                EnvoyInstallStep(label="Verify", command="envoy --version"),
+            ],
+        )
+    if os_name == "linux":
+        return (
+            "Install envoy via func-e (works on any glibc Linux), then retry.",
+            [
+                EnvoyInstallStep(
+                    label="Install func-e launcher",
+                    command="curl -L https://func-e.io/install.sh | sudo bash -s -- -b /usr/local/bin",
+                ),
+                EnvoyInstallStep(
+                    label="Download envoy 1.32.2 (cached under ~/.local/share/func-e)",
+                    command="func-e use 1.32.2",
+                ),
+                EnvoyInstallStep(
+                    label="Symlink the actual binary into PATH (func-e which prints the real path)",
+                    command="sudo ln -sf \"$(func-e which)\" /usr/local/bin/envoy",
+                ),
+                EnvoyInstallStep(label="Verify", command="envoy --version"),
+            ],
+        )
+    if os_name == "windows":
+        return (
+            "Windows is not supported for local-mode envoy. Use remote mode "
+            "(deploy envoy via Docker / Kubernetes / WSL) instead.",
+            [],
+        )
+    return (
+        f"No automated install recipe for OS {os_name!r}. Install envoy manually "
+        "(see https://www.envoyproxy.io/docs/envoy/latest/start/install) and "
+        "either put it on PATH or set ENVOY_BIN to its absolute path.",
+        [],
+    )
+
+
+def _check_dir_writable(path: str) -> tuple[bool, str | None]:
+    """Return (ok, reason). Tries to create the dir; if it exists but isn't
+    writable, reports that. We do the touch-and-rm dance because os.access()
+    lies on some filesystems (root-squashed NFS, overlayfs)."""
+    abs_path = os.path.abspath(path)
+    try:
+        os.makedirs(abs_path, exist_ok=True)
+    except PermissionError as e:
+        return False, f"cannot create {abs_path!r}: {e}"
+    except OSError as e:
+        return False, f"cannot create {abs_path!r}: {e}"
+    probe = os.path.join(abs_path, ".llmxy-write-probe")
+    try:
+        with open(probe, "w") as f:
+            f.write("")
+        os.remove(probe)
+    except OSError as e:
+        return False, f"directory exists but is not writable: {abs_path!r} ({e})"
+    return True, None
+
+
+def _local_precheck() -> EnvoyLocalPrecheckOut:
+    os_name = platform.system().lower()  # "linux" | "darwin" | "windows"
+    arch = platform.machine().lower()
+    supported_os = os_name in ("linux", "darwin")
+    mode_enabled = bool(settings.ENVOY_LOCAL_MODE_ENABLED)
+    resolved = _resolve_envoy_bin()
+    installed = resolved is not None
+    version = _envoy_version(resolved) if resolved else None
+    hint, steps = _install_steps_for(os_name)
+
+    reason: str | None = None
+    ok = True
+    if not mode_enabled:
+        ok = False
+        reason = (
+            "local-mode envoy is disabled on this api (ENVOY_LOCAL_MODE_ENABLED=false). "
+            "Set ENVOY_LOCAL_MODE_ENABLED=true in .env and restart, or use remote mode."
+        )
+        hint = reason
+        steps = []
+    elif not supported_os:
+        ok = False
+        reason = f"local-mode envoy is not supported on {os_name!r} (the api host)."
+    elif not installed:
+        ok = False
+        reason = (
+            f"envoy binary not found (ENVOY_BIN={settings.ENVOY_BIN!r}). "
+            "Install envoy on the api host, then retry."
+        )
+    else:
+        # Binary OK — confirm we can actually write the per-instance config
+        # and log directories. A non-writable ENVOY_CONFIG_ROOT/ENVOY_LOG_ROOT
+        # was a common cause of a confusing 500 on POST /instances; surface
+        # it here so the operator can fix permissions before submitting.
+        for label, base in (
+            ("ENVOY_CONFIG_ROOT", settings.ENVOY_CONFIG_ROOT),
+            ("ENVOY_LOG_ROOT", settings.ENVOY_LOG_ROOT),
+        ):
+            dir_ok, dir_reason = _check_dir_writable(base)
+            if not dir_ok:
+                ok = False
+                reason = f"{label}={base!r} is not writable by the api process. {dir_reason}"
+                hint = (
+                    f"Create the directory and grant the api user write access, e.g.\n"
+                    f"    sudo mkdir -p {os.path.abspath(base)} && sudo chown -R $USER {os.path.abspath(base)}\n"
+                    "Or point the env var at a path the api process owns and restart."
+                )
+                steps = [
+                    EnvoyInstallStep(
+                        label=f"Create + chown {label}",
+                        command=f"sudo mkdir -p {os.path.abspath(base)} && sudo chown -R $USER {os.path.abspath(base)}",
+                    ),
+                ]
+                break
+
+    return EnvoyLocalPrecheckOut(
+        ok=ok,
+        mode_enabled=mode_enabled,
+        os=os_name,
+        arch=arch,
+        supported_os=supported_os,
+        installed=installed,
+        envoy_bin=settings.ENVOY_BIN,
+        resolved_path=resolved,
+        version=version,
+        reason=reason,
+        install_hint=hint,
+        install_steps=steps,
+    )
+
+
+def _local_precheck_error_detail(pc: EnvoyLocalPrecheckOut) -> str:
+    parts: list[str] = []
+    if pc.reason:
+        parts.append(pc.reason)
+    if pc.install_hint and pc.install_hint != pc.reason:
+        parts.append(pc.install_hint)
+    if pc.install_steps:
+        parts.append("Install steps:")
+        for s in pc.install_steps:
+            parts.append(f"  - {s.label}: {s.command}")
+    return "\n".join(parts) if parts else "local-mode envoy precheck failed"
 
 
 def _ensure_local(inst: EnvoyInstance) -> None:
@@ -81,6 +247,19 @@ def _build_remote_admin_url(host: str | None, admin_port: int | None, fallback: 
     return None
 
 
+@router.get("/local-precheck", response_model=EnvoyLocalPrecheckOut)
+async def local_precheck(_: User = Depends(require_admin)):
+    """Report whether local-mode envoy can be spawned on this api host.
+
+    Called by the create-instance dialog (mode=local) BEFORE the operator
+    submits, so unsupported OS / missing binary / disabled mode are surfaced
+    with copy-pasteable install commands instead of a raw 400 on submit.
+    The same check is repeated server-side in POST /instances — this endpoint
+    is advisory, never authoritative.
+    """
+    return _local_precheck()
+
+
 @router.post("/test-connection", response_model=EnvoyTestConnOut)
 async def test_connection(
     req: EnvoyTestConnIn,
@@ -120,22 +299,13 @@ async def create_instance(
 ):
     mode = EnvoyMode(req.mode)
     if mode == EnvoyMode.local:
-        if not settings.ENVOY_LOCAL_MODE_ENABLED:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "local-mode envoy is disabled (ENVOY_LOCAL_MODE_ENABLED=false). "
-                "Create a remote instance and deploy envoy externally instead.",
-            )
+        pc = _local_precheck()
+        if not pc.ok:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, _local_precheck_error_detail(pc))
         if req.admin_port is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "admin_port required for local mode")
         if req.listen_port == req.admin_port:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "listen_port and admin_port must differ")
-        if _resolve_envoy_bin() is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"envoy binary not found (ENVOY_BIN={settings.ENVOY_BIN!r}). "
-                "Install envoy (e.g. `brew install envoy`) or set ENVOY_BIN to an absolute path in .env.",
-            )
     else:
         # Remote: require host + admin_port. The expected flow is: operator
         # opens the create dialog → picks remote → UI shows deploy manifests
@@ -187,8 +357,20 @@ async def create_instance(
 
     if mode == EnvoyMode.local:
         cfg_dir, log_dir = _paths(req.name)
-        os.makedirs(cfg_dir, exist_ok=True)
-        os.makedirs(log_dir, exist_ok=True)
+        try:
+            os.makedirs(cfg_dir, exist_ok=True)
+            os.makedirs(log_dir, exist_ok=True)
+        except OSError as e:
+            # Belt-and-suspenders: the precheck above should have already
+            # rejected this, but if the dirs become unwritable between
+            # precheck and submit (or the operator bypassed the UI),
+            # convert to a 400 with the same install-style guidance.
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"cannot create envoy directories ({e}). "
+                f"Ensure ENVOY_CONFIG_ROOT={settings.ENVOY_CONFIG_ROOT!r} and "
+                f"ENVOY_LOG_ROOT={settings.ENVOY_LOG_ROOT!r} are writable by the api process.",
+            )
         admin_url = f"http://127.0.0.1:{req.admin_port}"
         inst = EnvoyInstance(
             name=req.name,
@@ -507,6 +689,27 @@ async def instance_logs(
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     _ensure_local(inst)
     return {"lines": await runtime.tail_logs(inst, tail)}
+
+
+@router.get("/instances/{inst_id}/access-logs")
+async def instance_access_logs(
+    inst_id: int,
+    tail: int = Query(200, ge=1, le=5000),
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Tail HTTP access log lines streamed from envoy via gRPC ALS.
+
+    Works for BOTH local and remote modes — the data path is the same gRPC
+    stream regardless of where envoy runs, so unlike /logs (which reads the
+    local envoy.log file) this endpoint has no _ensure_local restriction.
+    The buffer is in-memory and bounded; restart of the api drops history.
+    """
+    from app.services.envoy import access_log_buffer
+    inst = await db.get(EnvoyInstance, inst_id)
+    if not inst:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    return {"lines": access_log_buffer.tail(inst.node_id, tail)}
 
 
 # ----- Remote-node-only endpoints -------------------------------------------

@@ -24,9 +24,10 @@ _sym_db = _symbol_database.Default()
 
 from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 from google.protobuf import duration_pb2 as google_dot_protobuf_dot_duration__pb2
+from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tals.proto\x12\tllmxy.als\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1egoogle/protobuf/duration.proto\"\xa5\x03\n\x17StreamAccessLogsMessage\x12\x41\n\nidentifier\x18\x01 \x01(\x0b\x32-.llmxy.als.StreamAccessLogsMessage.Identifier\x12L\n\thttp_logs\x18\x02 \x01(\x0b\x32\x37.llmxy.als.StreamAccessLogsMessage.HTTPAccessLogEntriesH\x00\x12J\n\x08tcp_logs\x18\x03 \x01(\x0b\x32\x36.llmxy.als.StreamAccessLogsMessage.TCPAccessLogEntriesH\x00\x1a=\n\nIdentifier\x12\x1d\n\x04node\x18\x01 \x01(\x0b\x32\x0f.llmxy.als.Node\x12\x10\n\x08log_name\x18\x02 \x01(\t\x1aH\n\x14HTTPAccessLogEntries\x12\x30\n\tlog_entry\x18\x01 \x03(\x0b\x32\x1d.llmxy.als.HTTPAccessLogEntry\x1a\x15\n\x13TCPAccessLogEntriesB\r\n\x0blog_entries\"\x1a\n\x18StreamAccessLogsResponse\"#\n\x04Node\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\t\"\xb3\x01\n\x12HTTPAccessLogEntry\x12\x35\n\x11\x63ommon_properties\x18\x01 \x01(\x0b\x32\x1a.llmxy.als.AccessLogCommon\x12\x31\n\x07request\x18\x03 \x01(\x0b\x32 .llmxy.als.HTTPRequestProperties\x12\x33\n\x08response\x18\x04 \x01(\x0b\x32!.llmxy.als.HTTPResponseProperties\"\x7f\n\x0f\x41\x63\x63\x65ssLogCommon\x12+\n\x08\x64uration\x18\x17 \x01(\x0b\x32\x19.google.protobuf.Duration\x12%\n\x08metadata\x18\x11 \x01(\x0b\x32\x13.llmxy.als.Metadata\x12\x18\n\x10upstream_cluster\x18\x0f \x01(\t\"\x9c\x01\n\x08Metadata\x12@\n\x0f\x66ilter_metadata\x18\x01 \x03(\x0b\x32\'.llmxy.als.Metadata.FilterMetadataEntry\x1aN\n\x13\x46ilterMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12&\n\x05value\x18\x02 \x01(\x0b\x32\x17.google.protobuf.Struct:\x02\x38\x01\"\xab\x01\n\x15HTTPRequestProperties\x12\x0c\n\x04path\x18\x05 \x01(\t\x12M\n\x0frequest_headers\x18\r \x03(\x0b\x32\x34.llmxy.als.HTTPRequestProperties.RequestHeadersEntry\x1a\x35\n\x13RequestHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xd1\x01\n\x16HTTPResponseProperties\x12-\n\rresponse_code\x18\x01 \x01(\x0b\x32\x16.llmxy.als.UInt32Value\x12P\n\x10response_headers\x18\x04 \x03(\x0b\x32\x36.llmxy.als.HTTPResponseProperties.ResponseHeadersEntry\x1a\x36\n\x14ResponseHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x1c\n\x0bUInt32Value\x12\r\n\x05value\x18\x01 \x01(\r2q\n\x10\x41\x63\x63\x65ssLogService\x12]\n\x10StreamAccessLogs\x12\".llmxy.als.StreamAccessLogsMessage\x1a#.llmxy.als.StreamAccessLogsResponse(\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tals.proto\x12\tllmxy.als\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa5\x03\n\x17StreamAccessLogsMessage\x12\x41\n\nidentifier\x18\x01 \x01(\x0b\x32-.llmxy.als.StreamAccessLogsMessage.Identifier\x12L\n\thttp_logs\x18\x02 \x01(\x0b\x32\x37.llmxy.als.StreamAccessLogsMessage.HTTPAccessLogEntriesH\x00\x12J\n\x08tcp_logs\x18\x03 \x01(\x0b\x32\x36.llmxy.als.StreamAccessLogsMessage.TCPAccessLogEntriesH\x00\x1a=\n\nIdentifier\x12\x1d\n\x04node\x18\x01 \x01(\x0b\x32\x0f.llmxy.als.Node\x12\x10\n\x08log_name\x18\x02 \x01(\t\x1aH\n\x14HTTPAccessLogEntries\x12\x30\n\tlog_entry\x18\x01 \x03(\x0b\x32\x1d.llmxy.als.HTTPAccessLogEntry\x1a\x15\n\x13TCPAccessLogEntriesB\r\n\x0blog_entries\"\x1a\n\x18StreamAccessLogsResponse\"#\n\x04Node\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\t\"\xe5\x01\n\x12HTTPAccessLogEntry\x12\x35\n\x11\x63ommon_properties\x18\x01 \x01(\x0b\x32\x1a.llmxy.als.AccessLogCommon\x12\x30\n\x10protocol_version\x18\x02 \x01(\x0e\x32\x16.llmxy.als.HTTPVersion\x12\x31\n\x07request\x18\x03 \x01(\x0b\x32 .llmxy.als.HTTPRequestProperties\x12\x33\n\x08response\x18\x04 \x01(\x0b\x32!.llmxy.als.HTTPResponseProperties\"\x96\x02\n\x0f\x41\x63\x63\x65ssLogCommon\x12.\n\nstart_time\x18\x05 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x33\n\x17upstream_remote_address\x18\r \x01(\x0b\x32\x12.llmxy.als.Address\x12\x18\n\x10upstream_cluster\x18\x0f \x01(\t\x12\x30\n\x0eresponse_flags\x18\x10 \x01(\x0b\x32\x18.llmxy.als.ResponseFlags\x12%\n\x08metadata\x18\x11 \x01(\x0b\x32\x13.llmxy.als.Metadata\x12+\n\x08\x64uration\x18\x17 \x01(\x0b\x32\x19.google.protobuf.Duration\"\x9c\x01\n\x08Metadata\x12@\n\x0f\x66ilter_metadata\x18\x01 \x03(\x0b\x32\'.llmxy.als.Metadata.FilterMetadataEntry\x1aN\n\x13\x46ilterMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12&\n\x05value\x18\x02 \x01(\x0b\x32\x17.google.protobuf.Struct:\x02\x38\x01\"H\n\x07\x41\x64\x64ress\x12\x32\n\x0esocket_address\x18\x01 \x01(\x0b\x32\x18.llmxy.als.SocketAddressH\x00\x42\t\n\x07\x61\x64\x64ress\"H\n\rSocketAddress\x12\x0f\n\x07\x61\x64\x64ress\x18\x01 \x01(\t\x12\x14\n\nport_value\x18\x03 \x01(\rH\x00\x42\x10\n\x0eport_specifier\"\x9c\x07\n\rResponseFlags\x12 \n\x18\x66\x61iled_local_healthcheck\x18\x01 \x01(\x08\x12\x1b\n\x13no_healthy_upstream\x18\x02 \x01(\x08\x12 \n\x18upstream_request_timeout\x18\x03 \x01(\x08\x12\x13\n\x0blocal_reset\x18\x04 \x01(\x08\x12\x1d\n\x15upstream_remote_reset\x18\x05 \x01(\x08\x12#\n\x1bupstream_connection_failure\x18\x06 \x01(\x08\x12\'\n\x1fupstream_connection_termination\x18\x07 \x01(\x08\x12\x19\n\x11upstream_overflow\x18\x08 \x01(\x08\x12\x16\n\x0eno_route_found\x18\t \x01(\x08\x12\x16\n\x0e\x64\x65lay_injected\x18\n \x01(\x08\x12\x16\n\x0e\x66\x61ult_injected\x18\x0b \x01(\x08\x12\x14\n\x0crate_limited\x18\x0c \x01(\x08\x12\x43\n\x14unauthorized_details\x18\r \x01(\x0b\x32%.llmxy.als.ResponseFlags.Unauthorized\x12 \n\x18rate_limit_service_error\x18\x0e \x01(\x08\x12)\n!downstream_connection_termination\x18\x0f \x01(\x08\x12%\n\x1dupstream_retry_limit_exceeded\x18\x10 \x01(\x08\x12\x1b\n\x13stream_idle_timeout\x18\x11 \x01(\x08\x12%\n\x1dinvalid_envoy_request_headers\x18\x12 \x01(\x08\x12!\n\x19\x64ownstream_protocol_error\x18\x13 \x01(\x08\x12,\n$upstream_max_stream_duration_reached\x18\x14 \x01(\x08\x12\"\n\x1aresponse_from_cache_filter\x18\x15 \x01(\x08\x12\x1e\n\x16no_filter_config_found\x18\x16 \x01(\x08\x12\x18\n\x10\x64uration_timeout\x18\x17 \x01(\x08\x12\x1f\n\x17upstream_protocol_error\x18\x18 \x01(\x08\x12\x18\n\x10no_cluster_found\x18\x19 \x01(\x08\x12\x18\n\x10overload_manager\x18\x1a \x01(\x08\x12\x1e\n\x16\x64ns_resolution_failure\x18\x1b \x01(\x08\x1a\x0e\n\x0cUnauthorized\"\xf2\x02\n\x15HTTPRequestProperties\x12\x30\n\x0erequest_method\x18\x01 \x01(\x0e\x32\x18.llmxy.als.RequestMethod\x12\x0e\n\x06scheme\x18\x02 \x01(\t\x12\x11\n\tauthority\x18\x03 \x01(\t\x12\x0c\n\x04path\x18\x05 \x01(\t\x12\x12\n\nuser_agent\x18\x06 \x01(\t\x12\x15\n\rforwarded_for\x18\x08 \x01(\t\x12\x12\n\nrequest_id\x18\t \x01(\t\x12\x15\n\roriginal_path\x18\n \x01(\t\x12\x1a\n\x12request_body_bytes\x18\x0c \x01(\x04\x12M\n\x0frequest_headers\x18\r \x03(\x0b\x32\x34.llmxy.als.HTTPRequestProperties.RequestHeadersEntry\x1a\x35\n\x13RequestHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xee\x01\n\x16HTTPResponseProperties\x12-\n\rresponse_code\x18\x01 \x01(\x0b\x32\x16.llmxy.als.UInt32Value\x12\x1b\n\x13response_body_bytes\x18\x03 \x01(\x04\x12P\n\x10response_headers\x18\x04 \x03(\x0b\x32\x36.llmxy.als.HTTPResponseProperties.ResponseHeadersEntry\x1a\x36\n\x14ResponseHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x1c\n\x0bUInt32Value\x12\r\n\x05value\x18\x01 \x01(\r*U\n\x0bHTTPVersion\x12\x18\n\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\n\n\x06HTTP10\x10\x01\x12\n\n\x06HTTP11\x10\x02\x12\t\n\x05HTTP2\x10\x03\x12\t\n\x05HTTP3\x10\x04*\x89\x01\n\rRequestMethod\x12\x16\n\x12METHOD_UNSPECIFIED\x10\x00\x12\x07\n\x03GET\x10\x01\x12\x08\n\x04HEAD\x10\x02\x12\x08\n\x04POST\x10\x03\x12\x07\n\x03PUT\x10\x04\x12\n\n\x06\x44\x45LETE\x10\x05\x12\x0b\n\x07\x43ONNECT\x10\x06\x12\x0b\n\x07OPTIONS\x10\x07\x12\t\n\x05TRACE\x10\x08\x12\t\n\x05PATCH\x10\t2q\n\x10\x41\x63\x63\x65ssLogService\x12]\n\x10StreamAccessLogs\x12\".llmxy.als.StreamAccessLogsMessage\x1a#.llmxy.als.StreamAccessLogsResponse(\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -39,36 +40,48 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_HTTPREQUESTPROPERTIES_REQUESTHEADERSENTRY']._serialized_options = b'8\001'
   _globals['_HTTPRESPONSEPROPERTIES_RESPONSEHEADERSENTRY']._loaded_options = None
   _globals['_HTTPRESPONSEPROPERTIES_RESPONSEHEADERSENTRY']._serialized_options = b'8\001'
-  _globals['_STREAMACCESSLOGSMESSAGE']._serialized_start=87
-  _globals['_STREAMACCESSLOGSMESSAGE']._serialized_end=508
-  _globals['_STREAMACCESSLOGSMESSAGE_IDENTIFIER']._serialized_start=335
-  _globals['_STREAMACCESSLOGSMESSAGE_IDENTIFIER']._serialized_end=396
-  _globals['_STREAMACCESSLOGSMESSAGE_HTTPACCESSLOGENTRIES']._serialized_start=398
-  _globals['_STREAMACCESSLOGSMESSAGE_HTTPACCESSLOGENTRIES']._serialized_end=470
-  _globals['_STREAMACCESSLOGSMESSAGE_TCPACCESSLOGENTRIES']._serialized_start=472
-  _globals['_STREAMACCESSLOGSMESSAGE_TCPACCESSLOGENTRIES']._serialized_end=493
-  _globals['_STREAMACCESSLOGSRESPONSE']._serialized_start=510
-  _globals['_STREAMACCESSLOGSRESPONSE']._serialized_end=536
-  _globals['_NODE']._serialized_start=538
-  _globals['_NODE']._serialized_end=573
-  _globals['_HTTPACCESSLOGENTRY']._serialized_start=576
-  _globals['_HTTPACCESSLOGENTRY']._serialized_end=755
-  _globals['_ACCESSLOGCOMMON']._serialized_start=757
-  _globals['_ACCESSLOGCOMMON']._serialized_end=884
-  _globals['_METADATA']._serialized_start=887
-  _globals['_METADATA']._serialized_end=1043
-  _globals['_METADATA_FILTERMETADATAENTRY']._serialized_start=965
-  _globals['_METADATA_FILTERMETADATAENTRY']._serialized_end=1043
-  _globals['_HTTPREQUESTPROPERTIES']._serialized_start=1046
-  _globals['_HTTPREQUESTPROPERTIES']._serialized_end=1217
-  _globals['_HTTPREQUESTPROPERTIES_REQUESTHEADERSENTRY']._serialized_start=1164
-  _globals['_HTTPREQUESTPROPERTIES_REQUESTHEADERSENTRY']._serialized_end=1217
-  _globals['_HTTPRESPONSEPROPERTIES']._serialized_start=1220
-  _globals['_HTTPRESPONSEPROPERTIES']._serialized_end=1429
-  _globals['_HTTPRESPONSEPROPERTIES_RESPONSEHEADERSENTRY']._serialized_start=1375
-  _globals['_HTTPRESPONSEPROPERTIES_RESPONSEHEADERSENTRY']._serialized_end=1429
-  _globals['_UINT32VALUE']._serialized_start=1431
-  _globals['_UINT32VALUE']._serialized_end=1459
-  _globals['_ACCESSLOGSERVICE']._serialized_start=1461
-  _globals['_ACCESSLOGSERVICE']._serialized_end=1574
+  _globals['_HTTPVERSION']._serialized_start=2999
+  _globals['_HTTPVERSION']._serialized_end=3084
+  _globals['_REQUESTMETHOD']._serialized_start=3087
+  _globals['_REQUESTMETHOD']._serialized_end=3224
+  _globals['_STREAMACCESSLOGSMESSAGE']._serialized_start=120
+  _globals['_STREAMACCESSLOGSMESSAGE']._serialized_end=541
+  _globals['_STREAMACCESSLOGSMESSAGE_IDENTIFIER']._serialized_start=368
+  _globals['_STREAMACCESSLOGSMESSAGE_IDENTIFIER']._serialized_end=429
+  _globals['_STREAMACCESSLOGSMESSAGE_HTTPACCESSLOGENTRIES']._serialized_start=431
+  _globals['_STREAMACCESSLOGSMESSAGE_HTTPACCESSLOGENTRIES']._serialized_end=503
+  _globals['_STREAMACCESSLOGSMESSAGE_TCPACCESSLOGENTRIES']._serialized_start=505
+  _globals['_STREAMACCESSLOGSMESSAGE_TCPACCESSLOGENTRIES']._serialized_end=526
+  _globals['_STREAMACCESSLOGSRESPONSE']._serialized_start=543
+  _globals['_STREAMACCESSLOGSRESPONSE']._serialized_end=569
+  _globals['_NODE']._serialized_start=571
+  _globals['_NODE']._serialized_end=606
+  _globals['_HTTPACCESSLOGENTRY']._serialized_start=609
+  _globals['_HTTPACCESSLOGENTRY']._serialized_end=838
+  _globals['_ACCESSLOGCOMMON']._serialized_start=841
+  _globals['_ACCESSLOGCOMMON']._serialized_end=1119
+  _globals['_METADATA']._serialized_start=1122
+  _globals['_METADATA']._serialized_end=1278
+  _globals['_METADATA_FILTERMETADATAENTRY']._serialized_start=1200
+  _globals['_METADATA_FILTERMETADATAENTRY']._serialized_end=1278
+  _globals['_ADDRESS']._serialized_start=1280
+  _globals['_ADDRESS']._serialized_end=1352
+  _globals['_SOCKETADDRESS']._serialized_start=1354
+  _globals['_SOCKETADDRESS']._serialized_end=1426
+  _globals['_RESPONSEFLAGS']._serialized_start=1429
+  _globals['_RESPONSEFLAGS']._serialized_end=2353
+  _globals['_RESPONSEFLAGS_UNAUTHORIZED']._serialized_start=2339
+  _globals['_RESPONSEFLAGS_UNAUTHORIZED']._serialized_end=2353
+  _globals['_HTTPREQUESTPROPERTIES']._serialized_start=2356
+  _globals['_HTTPREQUESTPROPERTIES']._serialized_end=2726
+  _globals['_HTTPREQUESTPROPERTIES_REQUESTHEADERSENTRY']._serialized_start=2673
+  _globals['_HTTPREQUESTPROPERTIES_REQUESTHEADERSENTRY']._serialized_end=2726
+  _globals['_HTTPRESPONSEPROPERTIES']._serialized_start=2729
+  _globals['_HTTPRESPONSEPROPERTIES']._serialized_end=2967
+  _globals['_HTTPRESPONSEPROPERTIES_RESPONSEHEADERSENTRY']._serialized_start=2913
+  _globals['_HTTPRESPONSEPROPERTIES_RESPONSEHEADERSENTRY']._serialized_end=2967
+  _globals['_UINT32VALUE']._serialized_start=2969
+  _globals['_UINT32VALUE']._serialized_end=2997
+  _globals['_ACCESSLOGSERVICE']._serialized_start=3226
+  _globals['_ACCESSLOGSERVICE']._serialized_end=3339
 # @@protoc_insertion_point(module_scope)

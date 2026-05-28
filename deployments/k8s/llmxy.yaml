@@ -1,0 +1,223 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llmxy-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmxy-config
+  namespace: llmxy-system
+data:
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "llmxy"
+  POSTGRES_USER: "llmxy"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  XDS_GRPC_PORT: "8003"
+  ALS_GRPC_PORT: "8002"
+  API_PUBLIC_URL: "http://api:8000"
+  CORS_ORIGINS: "*"
+  CONTROL_PLANE_PUBLIC_HOST: "api"
+  NEXT_PUBLIC_API_BASE_URL: "http://api:8000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmxy-secrets
+  namespace: llmxy-system
+data:
+  POSTGRES_PASSWORD: "llmxy_pass"
+  JWT_SECRET: "change-me-please"
+  XDS_AUTH_TOKEN: "change-me-please"
+  ENCRYPTION_KEY: ""
+---
+# ---------- PostgreSQL ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: llmxy-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - { name: POSTGRES_USER, valueFrom: { configMapKeyRef: { name: llmxy-config, key: POSTGRES_USER } } }
+            - { name: POSTGRES_DB,   valueFrom: { configMapKeyRef: { name: llmxy-config, key: POSTGRES_DB } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { configMapKeyRef: { name: llmxy-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "llmxy"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: llmxy-system
+spec:
+  selector: { app: postgres }
+  ports:
+    - { port: 5432, targetPort: 5432 }
+---
+# ---------- Redis ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: llmxy-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: llmxy-system
+spec:
+  selector: { app: redis }
+  ports:
+    - { port: 6379, targetPort: 6379 }
+---
+# ---------- API ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: llmxy-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api }
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/wilsonwu/llmxy-api:latest
+          ports:
+            - { name: http,    containerPort: 8000 }
+            - { name: als,     containerPort: 8002 }
+            - { name: xds,     containerPort: 8003 }
+          envFrom:
+            - configMapRef: { name: llmxy-config }
+            - configMapRef: { name: llmxy-secrets }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: llmxy-system
+spec:
+  selector: { app: api }
+  ports:
+    - { name: http, port: 8000, targetPort: 8000 }
+    - { name: als,  port: 8002, targetPort: 8002 }
+    - { name: xds,  port: 8003, targetPort: 8003 }
+---
+# ---------- Website ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: website
+  namespace: llmxy-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: website }
+  template:
+    metadata:
+      labels: { app: website }
+    spec:
+      containers:
+        - name: website
+          image: ghcr.io/wilsonwu/llmxy-website:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - { name: NEXT_PUBLIC_API_BASE_URL, valueFrom: { configMapKeyRef: { name: llmxy-config, key: NEXT_PUBLIC_API_BASE_URL } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: website
+  namespace: llmxy-system
+spec:
+  selector: { app: website }
+  ports:
+    - { port: 3000, targetPort: 3000 }
+---
+# ---------- Admin ----------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: llmxy-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: admin }
+  template:
+    metadata:
+      labels: { app: admin }
+    spec:
+      containers:
+        - name: admin
+          image: ghcr.io/wilsonwu/llmxy-admin:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - { name: NEXT_PUBLIC_API_BASE_URL, valueFrom: { configMapKeyRef: { name: llmxy-config, key: NEXT_PUBLIC_API_BASE_URL } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: llmxy-system
+spec:
+  selector: { app: admin }
+  ports:
+    - { port: 3000, targetPort: 3000 }

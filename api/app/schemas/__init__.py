@@ -421,3 +421,28 @@ class EnvoyTestConnOut(BaseModel):
     status_code: Optional[int] = None
     latency_ms: Optional[int] = None
     error: Optional[str] = None
+
+
+class EnvoyInstallStep(BaseModel):
+    label: str
+    command: str
+
+
+class EnvoyLocalPrecheckOut(BaseModel):
+    # Tells the UI whether local-mode envoy can actually be spawned on THIS
+    # api host before the operator submits the create form. Anything other
+    # than ok=true (mode disabled / wrong OS / binary missing) is surfaced
+    # with a human reason + copy-pasteable install steps so the operator
+    # isn't left guessing at the 400 from POST /instances.
+    ok: bool
+    mode_enabled: bool
+    os: str  # "linux" | "darwin" | "windows" | other platform.system().lower()
+    arch: str
+    supported_os: bool
+    installed: bool
+    envoy_bin: str  # raw setting (may be a name on PATH or absolute path)
+    resolved_path: Optional[str] = None
+    version: Optional[str] = None
+    reason: Optional[str] = None
+    install_hint: Optional[str] = None
+    install_steps: list[EnvoyInstallStep] = []

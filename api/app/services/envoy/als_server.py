@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.models import EnvoyInstance, Model, UsageLog
 from app.services.billing import calc_cost_cents, charge_user
+from app.services.envoy import access_log_buffer
 from app.services.envoy.protos import als_pb2  # noqa: F401  (ensures compile)
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,151 @@ async def _node_exists(node_id: str) -> bool:
             await db.execute(select(EnvoyInstance).where(EnvoyInstance.node_id == node_id))
         ).scalar_one_or_none()
         return inst is not None
+
+
+# Subset of envoy ResponseFlags → short codes used in the default text format.
+# Source: envoy/source/common/stream_info/utility.cc. We only render flags that
+# can actually be set by an HCM-level log entry; rarely-fired ones (e.g. AHM,
+# OM) are still mapped so operators see them when they happen.
+_RESPONSE_FLAG_SHORT = [
+    ("failed_local_healthcheck", "LH"),
+    ("no_healthy_upstream", "UH"),
+    ("upstream_request_timeout", "UT"),
+    ("local_reset", "LR"),
+    ("upstream_remote_reset", "UR"),
+    ("upstream_connection_failure", "UF"),
+    ("upstream_connection_termination", "UC"),
+    ("upstream_overflow", "UO"),
+    ("no_route_found", "NR"),
+    ("delay_injected", "DI"),
+    ("fault_injected", "FI"),
+    ("rate_limited", "RL"),
+    ("unauthorized_details", "UAEX"),
+    ("rate_limit_service_error", "RLSE"),
+    ("downstream_connection_termination", "DC"),
+    ("upstream_retry_limit_exceeded", "URX"),
+    ("stream_idle_timeout", "SI"),
+    ("invalid_envoy_request_headers", "IH"),
+    ("downstream_protocol_error", "DPE"),
+    ("upstream_max_stream_duration_reached", "UMSDR"),
+    ("response_from_cache_filter", "RFCF"),
+    ("no_filter_config_found", "NFCF"),
+    ("duration_timeout", "DT"),
+    ("upstream_protocol_error", "UPE"),
+    ("no_cluster_found", "NC"),
+    ("overload_manager", "OM"),
+    ("dns_resolution_failure", "DF"),
+]
+
+# envoy.data.accesslog.v3.HTTPAccessLogEntry.HTTPVersion enum → wire text.
+_PROTOCOL_NAMES = {
+    0: "-",          # PROTOCOL_UNSPECIFIED
+    1: "HTTP/1.0",
+    2: "HTTP/1.1",
+    3: "HTTP/2",
+    4: "HTTP/3",
+}
+
+# envoy.config.core.v3.RequestMethod enum → wire text.
+_METHOD_NAMES = {
+    0: "-", 1: "GET", 2: "HEAD", 3: "POST", 4: "PUT", 5: "DELETE",
+    6: "CONNECT", 7: "OPTIONS", 8: "TRACE", 9: "PATCH",
+}
+
+
+def _render_response_flags(rf) -> str:
+    """Mimic envoy's `%RESPONSE_FLAGS%` substitution: concatenated short
+    codes (e.g. "UF,URX"), or "-" if no flag was set."""
+    if rf is None:
+        return "-"
+    codes: list[str] = []
+    for field, code in _RESPONSE_FLAG_SHORT:
+        if field == "unauthorized_details":
+            # message-typed flag — use HasField to detect presence.
+            try:
+                if rf.HasField("unauthorized_details"):
+                    codes.append(code)
+            except Exception:
+                pass
+            continue
+        try:
+            if getattr(rf, field, False) is True:
+                codes.append(code)
+        except Exception:
+            pass
+    return ",".join(codes) if codes else "-"
+
+
+def _fmt_address(addr) -> str:
+    """Render envoy.config.core.v3.Address as host:port (best effort)."""
+    if addr is None:
+        return "-"
+    try:
+        if addr.HasField("socket_address"):
+            sa = addr.socket_address
+            return f"{sa.address}:{sa.port_value}" if sa.address else "-"
+    except Exception:
+        pass
+    return "-"
+
+
+def _record_access_line(node_id: str | None, entry) -> None:
+    """Format one HTTPAccessLogEntry into envoy's default access log line
+    and push it into the per-node ring buffer. Mirrors envoy's built-in
+    format string:
+
+        [%START_TIME%] "%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%"
+        %RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION%
+        %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% "%REQ(X-FORWARDED-FOR)%"
+        "%REQ(USER-AGENT)%" "%REQ(X-REQUEST-ID)%" "%REQ(:AUTHORITY)%" "%UPSTREAM_HOST%"
+
+    Called for every entry, even non-billable ones (e.g. /v1/models listings),
+    so the admin "Access log" view reflects all traffic envoy sees.
+    """
+    if not node_id:
+        return
+    req = entry.request
+    resp = entry.response
+    cp = entry.common_properties
+    req_headers = dict(req.request_headers or {})
+    resp_headers = dict(resp.response_headers or {})
+
+    # START_TIME — envoy writes %Y-%m-%dT%H:%M:%S.%3f%z, we emit UTC with
+    # millisecond precision so it matches local default Envoy output.
+    if cp.HasField("start_time"):
+        st = cp.start_time.ToDatetime().replace(tzinfo=timezone.utc)
+    else:
+        st = datetime.now(timezone.utc)
+    start_time = st.strftime("%Y-%m-%dT%H:%M:%S.") + f"{st.microsecond // 1000:03d}Z"
+
+    method = _METHOD_NAMES.get(int(req.request_method), "-")
+    path = req.original_path or req.path or "-"
+    protocol = _PROTOCOL_NAMES.get(int(entry.protocol_version), "-")
+
+    rc = resp.response_code.value if resp.HasField("response_code") else 0
+    flags = _render_response_flags(cp.response_flags) if cp.HasField("response_flags") else "-"
+
+    bytes_received = int(req.request_body_bytes or 0)
+    bytes_sent = int(resp.response_body_bytes or 0)
+
+    duration_ms = 0
+    if cp.HasField("duration"):
+        d = cp.duration
+        duration_ms = int(d.seconds * 1000 + d.nanos / 1_000_000)
+    ust = _hdr(resp_headers, "x-envoy-upstream-service-time") or "-"
+
+    xff = req.forwarded_for or _hdr(req_headers, "x-forwarded-for") or "-"
+    ua = req.user_agent or _hdr(req_headers, "user-agent") or "-"
+    rid = req.request_id or _hdr(req_headers, "x-request-id") or _hdr(req_headers, "x-llmxy-request-id") or "-"
+    authority = req.authority or "-"
+    upstream_host = _fmt_address(cp.upstream_remote_address) if cp.HasField("upstream_remote_address") else "-"
+
+    line = (
+        f'[{start_time}] "{method} {path} {protocol}" '
+        f'{rc} {flags} {bytes_received} {bytes_sent} {duration_ms} {ust} '
+        f'"{xff}" "{ua}" "{rid}" "{authority}" "{upstream_host}"'
+    )
+    access_log_buffer.append(node_id, line)
 
 
 def _extract_usage(entry) -> tuple[int, int]:
@@ -265,6 +411,10 @@ async def _stream_handler(request_iterator, context):
         if not msg.HasField("http_logs"):
             continue
         for entry in msg.http_logs.log_entry:
+            try:
+                _record_access_line(node_id_from_msg, entry)
+            except Exception as e:
+                log.debug("als access-log buffer append failed: %s", e)
             try:
                 await _ingest_entry(entry)
             except Exception as e:

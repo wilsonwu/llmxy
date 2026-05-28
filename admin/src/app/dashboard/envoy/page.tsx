@@ -94,6 +94,113 @@ function MenuItem({ children, onClick }: { children: React.ReactNode; onClick: (
   );
 }
 
+type LocalPrecheckState = {
+  ok: boolean;
+  mode_enabled: boolean;
+  os: string;
+  arch: string;
+  supported_os: boolean;
+  installed: boolean;
+  envoy_bin: string;
+  resolved_path: string | null;
+  version: string | null;
+  reason: string | null;
+  install_hint: string | null;
+  install_steps: { label: string; command: string }[];
+};
+
+function LocalPrecheckPanel({
+  state,
+  loading,
+  error,
+  onRetry,
+}: {
+  state: LocalPrecheckState | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  if (loading && !state) {
+    return (
+      <div className="rounded border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600">
+        Checking envoy on this api host…
+      </div>
+    );
+  }
+  if (error && !state) {
+    return (
+      <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+        <div className="font-medium">Local-mode precheck failed</div>
+        <p className="mt-1 text-xs">{error}</p>
+        <button className="btn-outline mt-2" onClick={onRetry}>Retry</button>
+      </div>
+    );
+  }
+  if (!state) return null;
+
+  if (state.ok) {
+    return (
+      <div className="rounded border border-green-200 bg-green-50 p-3 text-sm text-green-900">
+        <div className="font-medium">✓ Local mode ready</div>
+        <p className="mt-1 text-xs">
+          OS: <code>{state.os}/{state.arch}</code>
+          {state.resolved_path && (<> · envoy: <code>{state.resolved_path}</code></>)}
+          {state.version && (<> · {state.version}</>)}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-900 space-y-2">
+      <div className="font-medium">✗ Local mode not ready on this api host</div>
+      <p className="text-xs">
+        OS: <code>{state.os}/{state.arch}</code> · ENVOY_BIN: <code>{state.envoy_bin}</code>
+        {state.resolved_path
+          ? <> · resolved: <code>{state.resolved_path}</code></>
+          : <> · resolved: <code>not found</code></>}
+      </p>
+      {state.reason && <p className="text-xs">{state.reason}</p>}
+      {state.install_hint && state.install_hint !== state.reason && (
+        <p className="text-xs">{state.install_hint}</p>
+      )}
+      {state.install_steps.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs font-medium">Install steps</div>
+          <ol className="ml-4 list-decimal space-y-1 text-xs">
+            {state.install_steps.map((s, idx) => (
+              <li key={idx}>
+                <div>{s.label}</div>
+                <div className="mt-0.5 flex items-center gap-2">
+                  <code className="flex-1 break-all rounded bg-gray-900 px-2 py-1 text-[11px] text-gray-100">
+                    {s.command}
+                  </code>
+                  <button
+                    type="button"
+                    className="btn-outline text-xs"
+                    onClick={() => navigator.clipboard.writeText(s.command)}
+                  >
+                    Copy
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {!state.supported_os && (
+        <p className="text-xs">
+          Tip: switch <b>Mode</b> to <b>remote</b> above and deploy envoy via Docker or
+          Kubernetes — that works from any OS.
+        </p>
+      )}
+      <div>
+        <button className="btn-outline text-xs" onClick={onRetry}>Re-check</button>
+      </div>
+    </div>
+  );
+}
+
 export default function EnvoyPage() {
   const { data, mutate } = useSWR<Inst[]>("/api/v1/admin/envoy/instances", fetcher, {
     refreshInterval: 5000,
@@ -103,7 +210,7 @@ export default function EnvoyPage() {
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [openMenu, setOpenMenu] = useState<{ id: number; top: number; right: number } | null>(null);
-  const [drawer, setDrawer] = useState<{ inst: Inst; tab: "stats" | "logs" | "conn" | "deploy" } | null>(null);
+  const [drawer, setDrawer] = useState<{ inst: Inst; tab: "stats" | "logs" | "access" | "conn" | "deploy" } | null>(null);
   const [drawerData, setDrawerData] = useState<any>(null);
   const [deploySubTab, setDeploySubTab] = useState<"k8s" | "docker" | "bootstrap">("k8s");
   // For the create dialog: which deployment method the operator picked, and a
@@ -117,6 +224,33 @@ export default function EnvoyPage() {
   const [previewData, setPreviewData] = useState<any>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Local-mode precheck: tells the operator BEFORE submit whether the api
+  // host can actually spawn envoy (OS supported, ENVOY_BIN installed,
+  // ENVOY_LOCAL_MODE_ENABLED). Lazy-loaded the first time the create dialog
+  // is opened with mode=local; cached for the life of the page.
+  const [localPrecheck, setLocalPrecheck] = useState<LocalPrecheckState | null>(null);
+  const [localPrecheckLoading, setLocalPrecheckLoading] = useState(false);
+  const [localPrecheckError, setLocalPrecheckError] = useState<string | null>(null);
+
+  async function refreshLocalPrecheck() {
+    setLocalPrecheckLoading(true);
+    setLocalPrecheckError(null);
+    try {
+      const r: LocalPrecheckState = await api("/api/v1/admin/envoy/local-precheck");
+      setLocalPrecheck(r);
+    } catch (e: any) {
+      setLocalPrecheckError(e.message || "precheck failed");
+    } finally {
+      setLocalPrecheckLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (creating?.mode === "local" && !localPrecheck && !localPrecheckLoading) {
+      refreshLocalPrecheck();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creating?.mode]);
 
   useEffect(() => {
     if (!creating || creating.mode !== "remote" || !creating.name) {
@@ -226,7 +360,7 @@ export default function EnvoyPage() {
     mutate();
   }
 
-  async function openDrawer(inst: Inst, tab: "stats" | "logs" | "conn" | "deploy") {
+  async function openDrawer(inst: Inst, tab: "stats" | "logs" | "access" | "conn" | "deploy") {
     setDrawer({ inst, tab });
     setDrawerData(null);
     setDeploySubTab("k8s");
@@ -235,6 +369,8 @@ export default function EnvoyPage() {
         setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/stats`));
       } else if (tab === "logs") {
         setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/logs?tail=200`));
+      } else if (tab === "access") {
+        setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/access-logs?tail=500`));
       } else if (tab === "conn") {
         setDrawerData(await api(`/api/v1/admin/envoy/instances/${inst.id}/connection`));
       } else {
@@ -336,6 +472,7 @@ export default function EnvoyPage() {
                           {i.mode === "local" && (
                             <MenuItem onClick={() => { openDrawer(i, "logs"); setOpenMenu(null); }}>Logs</MenuItem>
                           )}
+                          <MenuItem onClick={() => { openDrawer(i, "access"); setOpenMenu(null); }}>Access log</MenuItem>
                           {i.mode === "remote" && (
                             <>
                               <MenuItem onClick={() => { openDrawer(i, "conn"); setOpenMenu(null); }}>Connection</MenuItem>
@@ -582,6 +719,15 @@ export default function EnvoyPage() {
             )}
 
             {creating.mode === "local" && (
+              <LocalPrecheckPanel
+                state={localPrecheck}
+                loading={localPrecheckLoading}
+                error={localPrecheckError}
+                onRetry={refreshLocalPrecheck}
+              />
+            )}
+
+            {creating.mode === "local" && (
               <p className="text-xs text-gray-500">
                 Created in stopped state. Click Start to spawn the envoy subprocess.
               </p>
@@ -592,7 +738,11 @@ export default function EnvoyPage() {
               <button
                 className="btn-primary"
                 onClick={create}
-                disabled={!creating.name || (creating.mode === "remote" && !creating.host)}
+                disabled={
+                  !creating.name
+                  || (creating.mode === "remote" && !creating.host)
+                  || (creating.mode === "local" && localPrecheck !== null && !localPrecheck.ok)
+                }
               >
                 Create
               </button>
@@ -731,6 +881,21 @@ export default function EnvoyPage() {
               <pre className="max-h-[60vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
                 {(drawerData.lines as string[]).join("\n")}
               </pre>
+            )}
+            {drawer.tab === "access" && drawerData && !drawerData.error && (
+              <>
+                {(drawerData.lines as string[] | undefined)?.length ? (
+                  <pre className="max-h-[60vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
+                    {(drawerData.lines as string[]).join("\n")}
+                  </pre>
+                ) : (
+                  <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+                    No access log entries yet for node <code>{drawer.inst.node_id}</code>.
+                    Lines appear here as envoy streams them to the control plane via gRPC ALS.
+                    The buffer is in-memory and resets when the api process restarts.
+                  </div>
+                )}
+              </>
             )}
             {drawer.tab === "conn" && drawerData && !drawerData.error && (
               <table className="table">
