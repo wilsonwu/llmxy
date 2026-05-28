@@ -46,30 +46,60 @@ log = logging.getLogger(__name__)
 # the proxy never buffers the full response — preserves TTFT for clients.
 # Non-stream JSON uses handle:body() (bounded by per_connection_buffer_limit).
 USAGE_LUA = r"""
+-- gsub replacement strings treat `%` specially. Upstream model names can
+-- legitimately contain `%` (rare) or `/` (common, e.g. "public/foo"); we
+-- escape `%` to keep the replacement literal.
+local function lua_gsub_escape_repl(s)
+  return (string.gsub(s, "%%", "%%%%"))
+end
+
 function envoy_on_request(handle)
   local path = handle:headers():get(":path") or ""
-  if not string.find(path, "/v1/chat/completions", 1, true) then return end
+  -- Body rewrite applies to any OpenAI-shape endpoint that carries a top-level
+  -- `model` field: chat/completions, completions, embeddings. The presence of
+  -- the x-llmxy-upstream-model header (set by ext_authz) gates the rewrite,
+  -- so non-relay paths are unaffected.
+  local is_chat = string.find(path, "/v1/chat/completions", 1, true) ~= nil
+  local has_model = is_chat
+                    or string.find(path, "/v1/completions", 1, true) ~= nil
+                    or string.find(path, "/v1/embeddings", 1, true) ~= nil
+  if not (is_chat or has_model) then return end
+
   local body = handle:body()
   if not body then return end
   local len = body:length()
   if len == 0 then return end
   local raw = body:getBytes(0, len)
-  -- Only patch streaming requests: ensure include_usage so the final SSE
-  -- chunk carries a usage block. Detection is by string match — avoids JSON
-  -- parsing in Lua and is safe because "stream":true is canonical.
-  if not string.find(raw, '"stream"%s*:%s*true') then return end
-  if string.find(raw, '"include_usage"%s*:%s*true') then return end
-  local patched
-  if string.find(raw, '"stream_options"') then
-    -- inject include_usage into existing stream_options object
-    patched = string.gsub(raw, '("stream_options"%s*:%s*{)',
-                          '%1"include_usage":true,', 1)
-  else
-    -- append a stream_options field before the closing brace
-    patched = string.gsub(raw, '}%s*$',
-                          ',"stream_options":{"include_usage":true}}', 1)
+  local patched = raw
+
+  -- 1) Rewrite top-level "model": user-facing code → upstream model name.
+  -- FastAPI relay path does this in openai.py; Envoy relays the body as-is
+  -- so without this rewrite the upstream sees the public alias and 404s.
+  local upstream_model = handle:headers():get("x-llmxy-upstream-model")
+  if has_model and upstream_model and upstream_model ~= "" then
+    -- Replace the FIRST top-level `"model":"..."` occurrence only. Nested
+    -- assistant message content that happens to contain the substring won't
+    -- match this exact JSON-key shape in practice.
+    local repl = '"model":"' .. lua_gsub_escape_repl(upstream_model) .. '"'
+    local new_raw, n = string.gsub(patched, '"model"%s*:%s*"[^"]*"', repl, 1)
+    if n > 0 then patched = new_raw end
   end
-  if patched and patched ~= raw then
+
+  -- 2) Only patch streaming chat requests: ensure include_usage so the final
+  -- SSE chunk carries a usage block. Detection is by string match — avoids
+  -- JSON parsing in Lua and is safe because "stream":true is canonical.
+  if is_chat and string.find(patched, '"stream"%s*:%s*true')
+              and not string.find(patched, '"include_usage"%s*:%s*true') then
+    if string.find(patched, '"stream_options"') then
+      patched = string.gsub(patched, '("stream_options"%s*:%s*{)',
+                            '%1"include_usage":true,', 1)
+    else
+      patched = string.gsub(patched, '}%s*$',
+                            ',"stream_options":{"include_usage":true}}', 1)
+    end
+  end
+
+  if patched ~= raw then
     body:setBytes(patched)
     handle:headers():replace("content-length", tostring(#patched))
   end
