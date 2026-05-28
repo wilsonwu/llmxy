@@ -38,7 +38,7 @@ export default function RegisterPage() {
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>
         <div>
-          <label className="label">Password (>= 6 chars)</label>
+          <label className="label">Password (&ge; 6 chars)</label>
           <input className="input" type="password" minLength={6} value={password} onChange={(e) => setPw(e.target.value)} required />
         </div>
         {err && <p className="text-sm text-red-600">{err}</p>}
