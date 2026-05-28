@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
@@ -9,7 +9,7 @@ const CHANNELS = [
   { id: "stripe", label: "Stripe" },
 ];
 
-export default function TopupPage() {
+function TopupInner() {
   const sp = useSearchParams();
   const planIdParam = sp.get("plan_id");
   const amountParam = sp.get("amount");
@@ -70,5 +70,13 @@ export default function TopupPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function TopupPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading…</div>}>
+      <TopupInner />
+    </Suspense>
   );
 }
