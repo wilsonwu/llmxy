@@ -23,6 +23,7 @@ type Inst = {
   last_error: string | null;
   last_seen_at: string | null;
   last_xds_version: string | null;
+  version: string | null;
 };
 
 type CreateForm = {
@@ -397,7 +398,7 @@ export default function EnvoyPage() {
           <thead>
             <tr>
               <th>ID</th><th>Name</th><th>Mode</th><th>Node id</th>
-              <th>Entry URL</th><th>Status</th><th>cfg v</th>
+              <th>Entry URL</th><th>Status</th><th>Version</th><th>cfg v</th>
               <th>Last seen / health</th><th></th>
             </tr>
           </thead>
@@ -430,6 +431,7 @@ export default function EnvoyPage() {
                     <span className={`rounded px-2 py-0.5 text-xs ${statusColor[i.status]}`}>{i.status}</span>
                   )}
                 </td>
+                <td className="font-mono text-xs text-gray-600">{i.version || "—"}</td>
                 <td>{i.config_version}</td>
                 <td className="text-xs text-gray-500">
                   {(i.last_seen_at || i.last_health_at) ? new Date(i.last_seen_at || i.last_health_at!).toLocaleString() : "—"}

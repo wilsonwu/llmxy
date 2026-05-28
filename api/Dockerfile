@@ -1,5 +1,5 @@
 ### envoy binary (multi-stage; the official image ships a static linux/amd64 binary)
-FROM envoyproxy/envoy:v1.31-latest AS envoy
+FROM envoyproxy/envoy:v1.37.2 AS envoy
 
 FROM python:3.11-slim
 

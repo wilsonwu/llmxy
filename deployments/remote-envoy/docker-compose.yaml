@@ -6,7 +6,7 @@
 # is rendered at container start.
 services:
   envoy:
-    image: envoyproxy/envoy:v1.31-latest
+    image: envoyproxy/envoy:v1.37.2
     container_name: llmxy-envoy
     restart: unless-stopped
     environment:

@@ -96,7 +96,7 @@ spec:
     spec:
       containers:
         - name: envoy
-          image: envoyproxy/envoy:v1.31-latest
+          image: envoyproxy/envoy:v1.37.2
           env:
             # ---------- EDIT ME ----------
             - name: LLMXY_NODE_ID

@@ -348,6 +348,10 @@ class EnvoyInstanceOut(BaseModel):
     last_error: Optional[str] = None
     last_seen_at: Optional[datetime] = None
     last_xds_version: Optional[str] = None
+    # Envoy version (e.g. "1.37.2") probed live from the instance's admin
+    # /server_info endpoint. Filled by the list/detail handlers — None when
+    # the admin endpoint is unreachable (envoy stopped, remote offline, etc.).
+    version: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

@@ -70,9 +70,9 @@ class Settings(BaseSettings):
     # bootstrap template returned to operators.
     CONTROL_PLANE_PUBLIC_HOST: str = "127.0.0.1"
     # Envoy container image used in remote deploy manifests (k8s + docker run).
-    # Override to a mirror (e.g. docker.m.daocloud.io/envoyproxy/envoy:v1.32.2)
+    # Override to a mirror (e.g. docker.m.daocloud.io/envoyproxy/envoy:v1.37.2)
     # when the operator's environment can't reach docker.io directly.
-    ENVOY_IMAGE: str = "envoyproxy/envoy:v1.32.2"
+    ENVOY_IMAGE: str = "envoyproxy/envoy:v1.37.2"
     # ext_authz max body buffer (bytes). Must be >= largest expected chat
     # completion request body — anything larger gets rejected upstream.
     ENVOY_EXT_AUTHZ_MAX_BYTES: int = 1024 * 1024  # 1 MiB

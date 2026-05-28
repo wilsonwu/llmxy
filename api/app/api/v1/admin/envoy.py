@@ -56,6 +56,81 @@ def _envoy_version(path: str) -> str | None:
         return None
 
 
+# Live-probed envoy version cache: id -> (epoch_seconds, version_str_or_None).
+# /server_info is cheap on the envoy side but admin endpoints are 1 round-trip
+# each — cache for ~30s so SWR's frequent polls don't fan out into N+1 probes
+# per refresh. Restart/stop invalidates the row by id.
+_VERSION_TTL_SEC = 30.0
+_version_cache: dict[int, tuple[float, str | None]] = {}
+
+
+def _parse_server_info_version(payload: dict) -> str | None:
+    """Extract a semver-shaped tag from envoy admin /server_info JSON.
+
+    Envoy returns either a structured `version.{major,minor,patch}` triple or
+    the legacy free-text `version` ("sha/1.37.2/Clean/RELEASE/BoringSSL").
+    Prefer structured; fall back to regex on the string."""
+    import re
+    v = payload.get("version")
+    if isinstance(v, dict):
+        try:
+            return f"{int(v['major_number'])}.{int(v['minor_number'])}.{int(v['patch'])}"
+        except Exception:
+            pass
+    if isinstance(v, str):
+        m = re.search(r"\b(\d+\.\d+\.\d+)\b", v)
+        if m:
+            return m.group(1)
+    return None
+
+
+async def _probe_envoy_version(inst: EnvoyInstance) -> str | None:
+    """Hit envoy admin /server_info and return the semver tag. Returns None
+    on any failure (stopped envoy, unreachable remote, parse error). Caller
+    is responsible for caching."""
+    if inst.mode == EnvoyMode.local:
+        if not inst.admin_port:
+            return None
+        url = f"http://127.0.0.1:{inst.admin_port}/server_info"
+    else:
+        if not inst.admin_url:
+            return None
+        url = f"{inst.admin_url.rstrip('/')}/server_info"
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as c:
+            r = await c.get(url)
+            if r.status_code != 200:
+                return None
+            return _parse_server_info_version(r.json())
+    except Exception:
+        return None
+
+
+async def _resolve_versions(insts: list[EnvoyInstance]) -> dict[int, str | None]:
+    """Probe envoy versions for all instances concurrently, with a 30s TTL
+    cache to keep list polling cheap."""
+    import asyncio
+    import time as _t
+    now = _t.time()
+    out: dict[int, str | None] = {}
+    to_probe: list[EnvoyInstance] = []
+    for i in insts:
+        cached = _version_cache.get(i.id)
+        if cached and now - cached[0] < _VERSION_TTL_SEC:
+            out[i.id] = cached[1]
+        else:
+            to_probe.append(i)
+    if to_probe:
+        results = await asyncio.gather(
+            *[_probe_envoy_version(i) for i in to_probe],
+            return_exceptions=False,
+        )
+        for inst, ver in zip(to_probe, results):
+            _version_cache[inst.id] = (now, ver)
+            out[inst.id] = ver
+    return out
+
+
 def _install_steps_for(os_name: str) -> tuple[str | None, list[EnvoyInstallStep]]:
     """Return (one-line hint, copy-pasteable steps) for installing envoy on
     the api host. Used both by the precheck endpoint and to enrich the 400
@@ -78,8 +153,8 @@ def _install_steps_for(os_name: str) -> tuple[str | None, list[EnvoyInstallStep]
                     command="curl -L https://func-e.io/install.sh | sudo bash -s -- -b /usr/local/bin",
                 ),
                 EnvoyInstallStep(
-                    label="Download envoy 1.32.2 (cached under ~/.local/share/func-e)",
-                    command="func-e use 1.32.2",
+                    label="Download envoy 1.37.2 (cached under ~/.local/share/func-e)",
+                    command="func-e use 1.37.2",
                 ),
                 EnvoyInstallStep(
                     label="Symlink the actual binary into PATH (func-e which prints the real path)",
@@ -288,7 +363,13 @@ async def test_connection(
 @router.get("/instances", response_model=list[EnvoyInstanceOut])
 async def list_instances(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(EnvoyInstance).order_by(EnvoyInstance.id))).scalars().all()
-    return rows
+    versions = await _resolve_versions(list(rows))
+    out: list[EnvoyInstanceOut] = []
+    for r in rows:
+        m = EnvoyInstanceOut.model_validate(r, from_attributes=True)
+        m.version = versions.get(r.id)
+        out.append(m)
+    return out
 
 
 @router.post("/instances", response_model=EnvoyInstanceOut, status_code=status.HTTP_201_CREATED)
@@ -583,6 +664,7 @@ async def start_instance(inst_id: int, _: User = Depends(require_admin), db: Asy
     if not inst:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     _ensure_local(inst)
+    _version_cache.pop(inst_id, None)
     return await runtime.start(db, inst)
 
 
@@ -593,6 +675,7 @@ async def stop_instance(inst_id: int, _: User = Depends(require_admin), db: Asyn
     if not inst:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     _ensure_local(inst)
+    _version_cache.pop(inst_id, None)
     return await runtime.stop(db, inst)
 
 
@@ -603,6 +686,7 @@ async def restart_instance(inst_id: int, _: User = Depends(require_admin), db: A
     if not inst:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     _ensure_local(inst)
+    _version_cache.pop(inst_id, None)
     return await runtime.restart(db, inst)
 
 
