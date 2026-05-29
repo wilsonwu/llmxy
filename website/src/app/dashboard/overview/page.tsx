@@ -1,6 +1,7 @@
 "use client";
 import useSWR, { mutate as globalMutate } from "swr";
 import { api, fetcher } from "@/lib/api";
+import { Badge, useToast } from "@/components/ui";
 
 type Sub = {
   id: number;
@@ -20,17 +21,17 @@ type Sub = {
   depleted: boolean;
 };
 
-const statusBadge: Record<Sub["status"], string> = {
-  active: "bg-green-100 text-green-700",
-  past_due: "bg-amber-100 text-amber-700",
-  canceled: "bg-gray-100 text-gray-600",
-  expired: "bg-gray-100 text-gray-500",
+const statusTone: Record<Sub["status"], "success" | "warning" | "neutral"> = {
+  active: "success",
+  past_due: "warning",
+  canceled: "neutral",
+  expired: "neutral",
 };
-const depletedBadge = "bg-orange-100 text-orange-700";
 
 export default function Overview() {
   const { data: me } = useSWR<{ email: string; balance_cents: number; role: string }>("/api/v1/auth/me", fetcher);
   const { data: subs, mutate: mutateSubs } = useSWR<Sub[]>("/api/v1/usage/subscriptions", fetcher);
+  const { toast, confirm } = useToast();
   const now = Date.now();
   const live = (subs || []).filter(
     (s) => (s.status === "active" || s.status === "past_due") && new Date(s.current_period_end).getTime() > now
@@ -38,31 +39,33 @@ export default function Overview() {
   const closed = (subs || []).filter((s) => !live.includes(s));
 
   async function cancelAtPeriodEnd(s: Sub) {
-    if (!confirm(`Cancel at period end for ${s.plan_name || s.plan_code || `#${s.plan_id}`}? You keep your remaining quota until ${new Date(s.current_period_end).toLocaleString()} and pay nothing more.`)) return;
+    if (!(await confirm({ title: "Cancel at period end", body: `Cancel ${s.plan_name || s.plan_code || `#${s.plan_id}`} at period end? You keep your remaining quota until ${new Date(s.current_period_end).toLocaleString()} and pay nothing more.`, confirmText: "Cancel at period end" }))) return;
     try {
       await api(`/api/v1/subscriptions/${s.id}/cancel?at_period_end=true`, { method: "POST" });
       mutateSubs();
-    } catch (e: any) { alert(e?.message || "cancel failed"); }
+      toast("Will cancel at period end", "success");
+    } catch (e: any) { toast(e?.message || "cancel failed", "error"); }
   }
 
   async function cancelImmediate(s: Sub) {
-    if (!confirm(`Cancel ${s.plan_name || s.plan_code || `#${s.plan_id}`} IMMEDIATELY? You lose access right away and get a refund prorated by unused quota.`)) return;
+    if (!(await confirm({ title: "Cancel immediately", body: `Cancel ${s.plan_name || s.plan_code || `#${s.plan_id}`} immediately? You lose access right away and get a refund prorated by unused quota.`, danger: true, confirmText: "Cancel + refund" }))) return;
     try {
       const r = await api<{ refund_cents: number; balance_cents: number }>(
         `/api/v1/subscriptions/${s.id}/cancel?at_period_end=false`,
         { method: "POST" }
       );
-      alert(`Canceled. Refunded $${(r.refund_cents / 100).toFixed(2)} — wallet $${(r.balance_cents / 100).toFixed(2)}.`);
+      toast(`Refunded $${(r.refund_cents / 100).toFixed(2)} — wallet $${(r.balance_cents / 100).toFixed(2)}`, "success");
       mutateSubs();
       globalMutate("/api/v1/auth/me");
-    } catch (e: any) { alert(e?.message || "cancel failed"); }
+    } catch (e: any) { toast(e?.message || "cancel failed", "error"); }
   }
 
   async function resume(s: Sub) {
     try {
       await api(`/api/v1/subscriptions/${s.id}/resume`, { method: "POST" });
       mutateSubs();
-    } catch (e: any) { alert(e?.message || "resume failed"); }
+      toast("Subscription resumed", "success");
+    } catch (e: any) { toast(e?.message || "resume failed", "error"); }
   }
 
   async function renewNow(s: Sub) {
@@ -71,10 +74,10 @@ export default function Overview() {
         `/api/v1/subscriptions/${s.id}/renew`,
         { method: "POST" }
       );
-      alert(`Renew result: ${r.status} (${r.reason})`);
+      toast(`Renew: ${r.status} (${r.reason})`, r.ok ? "success" : "error");
       mutateSubs();
       globalMutate("/api/v1/auth/me");
-    } catch (e: any) { alert(e?.message || "renew failed"); }
+    } catch (e: any) { toast(e?.message || "renew failed", "error"); }
   }
 
   return (
@@ -128,11 +131,11 @@ export default function Overview() {
                     <td className="py-2">{s.plan_name || s.plan_code || `#${s.plan_id}`}</td>
                     <td>
                       {s.depleted ? (
-                        <span className={`rounded px-2 py-0.5 text-xs ${depletedBadge}`}>
+                        <Badge tone="warning">
                           {s.plan_type === "one_time" ? "exhausted" : "quota exhausted"}
-                        </span>
+                        </Badge>
                       ) : (
-                        <span className={`rounded px-2 py-0.5 text-xs ${statusBadge[s.status]}`}>{s.status}</span>
+                        <Badge tone={statusTone[s.status]}>{s.status}</Badge>
                       )}
                       {s.depleted && s.plan_type !== "one_time" && (
                         <p className="mt-1 text-xs text-gray-500">refills on renewal</p>

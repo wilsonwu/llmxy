@@ -2,6 +2,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { api, fetcher } from "@/lib/api";
+import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type QuotaMode = "until_depleted" | "periodic";
 type QuotaPeriod = "day" | "week" | "month";
@@ -40,10 +41,10 @@ const emptyForm: FormState = {
   quota_period: "month",
 };
 
-const statusBadge: Record<Status, string> = {
-  active: "bg-green-100 text-green-700",
-  disabled: "bg-gray-100 text-gray-600",
-  expired: "bg-orange-100 text-orange-700",
+const statusTone: Record<Status, "success" | "neutral" | "warning"> = {
+  active: "success",
+  disabled: "neutral",
+  expired: "warning",
 };
 
 function dollars(c: number) {
@@ -69,10 +70,11 @@ function toLocalInput(iso: string | null): string {
 }
 
 export default function KeysPage() {
-  const { data, mutate } = useSWR<Key[]>("/api/v1/api-keys", fetcher);
+  const { data, mutate, isLoading } = useSWR<Key[]>("/api/v1/api-keys", fetcher);
   const [editing, setEditing] = useState<FormState | null>(null);
   const [created, setCreated] = useState<string | null>(null);
   const [err, setErr] = useState("");
+  const { toast, confirm } = useToast();
 
   function openCreate() {
     setErr("");
@@ -137,12 +139,13 @@ export default function KeysPage() {
     }
   }
 
-  async function del(id: number) {
-    if (!confirm("Delete this key? Requests using it will start failing immediately.")) return;
+  async function del(id: number, name: string) {
+    if (!(await confirm({ title: "Delete API key", body: `Delete "${name}"? Requests using it will start failing immediately.`, danger: true, confirmText: "Delete" }))) return;
     try {
       await api(`/api/v1/api-keys/${id}`, { method: "DELETE" });
       mutate();
-    } catch (e: any) { setErr(e?.message || "delete failed"); }
+      toast("Key deleted", "success");
+    } catch (e: any) { toast(e?.message || "delete failed", "error"); }
   }
 
   async function toggle(k: Key) {
@@ -151,11 +154,12 @@ export default function KeysPage() {
     try {
       await api(`/api/v1/api-keys/${k.id}/${action}`, { method: "POST" });
       mutate();
+      toast(`Key ${action}d`, "success");
     } catch (e: any) {
       if (e?.detail?.code === "extend_expires_at_first") {
-        setErr("This key has expired. Edit it and set a future expiration before re-enabling.");
+        toast("This key has expired. Edit it and set a future expiration before re-enabling.", "error");
       } else {
-        setErr(e?.message || `${action} failed`);
+        toast(e?.message || `${action} failed`, "error");
       }
     }
   }
@@ -176,7 +180,7 @@ export default function KeysPage() {
         </div>
       )}
 
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead>
             <tr>
@@ -190,16 +194,15 @@ export default function KeysPage() {
             </tr>
           </thead>
           <tbody>
-            {data?.map((k) => {
+            {isLoading && <TableSkeleton cols={7} />}
+            {!isLoading && data?.map((k) => {
               const limited = k.quota_cents > 0;
               const pct = limited ? Math.min(100, Math.round((k.used_cents / k.quota_cents) * 100)) : 0;
               return (
                 <tr key={k.id} className="align-top">
                   <td className="font-medium">{k.name}</td>
                   <td><code className="text-xs">{k.key_prefix}…</code></td>
-                  <td>
-                    <span className={`rounded px-2 py-0.5 text-xs ${statusBadge[k.status]}`}>{k.status}</span>
-                  </td>
+                  <td><Badge tone={statusTone[k.status]}>{k.status}</Badge></td>
                   <td className="min-w-[180px]">
                     <div className="text-xs text-gray-700">
                       {dollars(k.used_cents)}{limited ? ` / ${dollars(k.quota_cents)}` : " / unlimited"}
@@ -231,23 +234,31 @@ export default function KeysPage() {
                     <button className="text-sm text-gray-600 hover:underline" onClick={() => toggle(k)}>
                       {k.status === "active" ? "Disable" : "Enable"}
                     </button>
-                    <button className="text-sm text-red-600 hover:underline" onClick={() => del(k.id)}>Delete</button>
+                    <button className="text-sm text-red-600 hover:underline" onClick={() => del(k.id, k.name)}>Delete</button>
                   </td>
                 </tr>
               );
             })}
-            {!data?.length && (
-              <tr><td colSpan={7} className="text-center text-gray-500">No keys yet</td></tr>
+            {!isLoading && !data?.length && (
+              <tr><td colSpan={7}><EmptyState title="No API keys yet" hint="Create one to authenticate requests against /v1/* endpoints." /></td></tr>
             )}
           </tbody>
         </table>
       </div>
 
       {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30" onClick={() => setEditing(null)}>
-          <div className="card w-[520px] space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold">{editing.id ? "Edit key" : "New key"}</h2>
-
+        <Modal
+          open={!!editing}
+          onClose={() => setEditing(null)}
+          title={editing.id ? "Edit key" : "New key"}
+          width="w-[520px]"
+          footer={
+            <>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={save}>{editing.id ? "Save" : "Create"}</button>
+            </>
+          }
+        >
             <div>
               <label className="label">Name</label>
               <input
@@ -328,12 +339,8 @@ export default function KeysPage() {
               </div>
             )}
 
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={save}>{editing.id ? "Save" : "Create"}</button>
-            </div>
-          </div>
-        </div>
+            {err && <p className="text-sm text-red-600">{err}</p>}
+        </Modal>
       )}
     </div>
   );

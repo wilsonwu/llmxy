@@ -2,6 +2,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
+import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type C = { id?: number; name: string; provider_type: string; base_url: string; api_key_enc?: string; enabled: boolean };
 
@@ -15,53 +16,80 @@ const PROVIDERS = [
 ];
 
 export default function ChannelsPage() {
-  const { data, mutate } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
+  const { data, mutate, isLoading } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
   const [editing, setEditing] = useState<C | null>(null);
   const [q, setQ] = useState("");
+  const { toast, confirm } = useToast();
   const filtered = (data || []).filter(c =>
     !q || c.name.toLowerCase().includes(q.toLowerCase()) || c.base_url.toLowerCase().includes(q.toLowerCase())
   );
 
   async function save(c: C) {
-    if (c.id) await api(`/api/v1/admin/channels/${c.id}`, { method: "PUT", body: JSON.stringify(c) });
-    else await api(`/api/v1/admin/channels`, { method: "POST", body: JSON.stringify(c) });
-    setEditing(null); mutate();
+    try {
+      if (c.id) await api(`/api/v1/admin/channels/${c.id}`, { method: "PUT", body: JSON.stringify(c) });
+      else await api(`/api/v1/admin/channels`, { method: "POST", body: JSON.stringify(c) });
+      setEditing(null);
+      mutate();
+      toast(c.id ? "Channel updated" : "Channel created", "success");
+    } catch (e: any) {
+      toast(e?.message || "Save failed", "error");
+    }
   }
-  async function del(id: number) {
-    if (!confirm("Delete this channel?")) return;
-    await api(`/api/v1/admin/channels/${id}`, { method: "DELETE" }); mutate();
+  async function del(id: number, name: string) {
+    if (!(await confirm({ title: "Delete channel", body: `Delete "${name}"? Models bound to it will lose their upstream.`, danger: true, confirmText: "Delete" }))) return;
+    try {
+      await api(`/api/v1/admin/channels/${id}`, { method: "DELETE" });
+      mutate();
+      toast("Channel deleted", "success");
+    } catch (e: any) {
+      toast(e?.message || "Delete failed", "error");
+    }
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Upstream channels</h1>
         <div className="flex items-center gap-2">
-          <input className="input" placeholder="Search name/URL" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input" placeholder="Search name/URL" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search channels" />
           <button className="btn-primary" onClick={() => setEditing({ ...empty })}>New</button>
         </div>
       </div>
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>BaseURL</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
-            {filtered.map((c) => (
+            {isLoading && <TableSkeleton cols={6} />}
+            {!isLoading && filtered.map((c) => (
               <tr key={c.id}>
-                <td>{c.id}</td><td>{c.name}</td><td>{c.provider_type}</td><td className="font-mono text-xs">{c.base_url}</td>
-                <td>{c.enabled ? "✓" : "—"}</td>
-                <td className="space-x-2">
+                <td>{c.id}</td><td className="font-medium">{c.name}</td><td>{c.provider_type}</td><td className="font-mono text-xs">{c.base_url}</td>
+                <td>{c.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
+                <td className="space-x-2 whitespace-nowrap">
                   <button className="btn-outline" onClick={() => setEditing({ ...c, api_key_enc: c.api_key_enc || "" })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(c.id!)}>Delete</button>
+                  <button className="btn-danger" onClick={() => del(c.id!, c.name)}>Delete</button>
                 </td>
               </tr>
             ))}
+            {!isLoading && !filtered.length && (
+              <tr><td colSpan={6}><EmptyState title={q ? "No channels match your search" : "No channels yet"} hint={q ? undefined : "Create one to point at an upstream provider like OpenAI or Azure."} /></td></tr>
+            )}
           </tbody>
         </table>
       </div>
-      {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
-          <div className="card w-[480px] max-h-[90vh] space-y-4 overflow-y-auto">
-            <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} channel</h2>
+
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={`${editing?.id ? "Edit" : "New"} channel`}
+        footer={
+          <>
+            <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="btn-primary" onClick={() => editing && save(editing)}>Save</button>
+          </>
+        }
+      >
+        {editing && (
+          <>
             <div>
               <label className="label">Name</label>
               <input className="input w-full" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
@@ -80,17 +108,13 @@ export default function ChannelsPage() {
               <label className="label">API Key</label>
               <input className="input w-full" type="password" value={editing.api_key_enc || ""} onChange={(e) => setEditing({ ...editing, api_key_enc: e.target.value })} />
             </div>
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
               Enabled
             </label>
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

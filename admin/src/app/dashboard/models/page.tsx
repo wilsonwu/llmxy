@@ -2,6 +2,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
+import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type Tier = { size: string; quality: string; price_micro: number };
 type Pricing = { mode?: string; tiers?: Tier[]; default_price_micro?: number };
@@ -133,23 +134,30 @@ function pricingSummary(m: M) {
 }
 
 export default function ModelsPage() {
-  const { data, mutate } = useSWR<M[]>("/api/v1/admin/models", fetcher);
+  const { data, mutate, isLoading } = useSWR<M[]>("/api/v1/admin/models", fetcher);
   const { data: channels } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
   const [editing, setEditing] = useState<M | null>(null);
   const [q, setQ] = useState("");
   const [showSample, setShowSample] = useState(false);
+  const { toast, confirm } = useToast();
   const filtered = (data || []).filter(m =>
     !q || m.code.toLowerCase().includes(q.toLowerCase()) || m.upstream_model.toLowerCase().includes(q.toLowerCase()) || m.display_name.toLowerCase().includes(q.toLowerCase())
   );
 
   async function save(m: M) {
-    if (m.id) await api(`/api/v1/admin/models/${m.id}`, { method: "PUT", body: JSON.stringify(m) });
-    else await api(`/api/v1/admin/models`, { method: "POST", body: JSON.stringify(m) });
-    setEditing(null); mutate();
+    try {
+      if (m.id) await api(`/api/v1/admin/models/${m.id}`, { method: "PUT", body: JSON.stringify(m) });
+      else await api(`/api/v1/admin/models`, { method: "POST", body: JSON.stringify(m) });
+      setEditing(null); mutate();
+      toast(m.id ? "Model updated" : "Model created", "success");
+    } catch (e: any) { toast(e?.message || "Save failed", "error"); }
   }
-  async function del(id: number) {
-    if (!confirm("Delete this model?")) return;
-    await api(`/api/v1/admin/models/${id}`, { method: "DELETE" }); mutate();
+  async function del(id: number, code: string) {
+    if (!(await confirm({ title: "Delete model", body: `Delete model "${code}"? Routes referencing it will lose this target.`, danger: true, confirmText: "Delete" }))) return;
+    try {
+      await api(`/api/v1/admin/models/${id}`, { method: "DELETE" }); mutate();
+      toast("Model deleted", "success");
+    } catch (e: any) { toast(e?.message || "Delete failed", "error"); }
   }
   const chName = (id: number) => channels?.find((c) => c.id === id)?.name || `#${id}`;
 
@@ -163,31 +171,48 @@ export default function ModelsPage() {
         </div>
       </div>
       <p className="text-xs text-gray-500">token rate unit: micro-cents (1/10000 cent) / 1K tokens (chat/embedding). image priced per generated image. e.g. 1500 ≈ $0.0015/1K · 400000 = $0.40/img.</p>
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>Kind</th><th>Protocol</th><th>Pricing</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
-            {filtered.map((m) => (
+            {isLoading && <TableSkeleton cols={10} />}
+            {!isLoading && filtered.map((m) => (
               <tr key={m.id}>
-                <td>{m.id}</td><td>{m.code}</td><td>{m.display_name}</td>
-                <td>{chName(m.channel_id)}</td><td>{m.upstream_model}</td>
-                <td>{m.kind || "chat"}</td>
+                <td>{m.id}</td><td className="font-mono text-xs">{m.code}</td><td>{m.display_name}</td>
+                <td>{chName(m.channel_id)}</td><td className="font-mono text-xs">{m.upstream_model}</td>
+                <td>
+                  {m.kind === "image" ? <Badge tone="purple">image</Badge>
+                    : m.kind === "embedding" ? <Badge tone="brand">embedding</Badge>
+                    : <Badge tone="info">chat</Badge>}
+                </td>
                 <td className="text-xs text-gray-500">{m.upstream_protocol || "auto"}</td>
                 <td>{pricingSummary(m)}</td>
-                <td>{m.enabled ? "✓" : "—"}</td>
-                <td className="space-x-2">
+                <td>{m.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
+                <td className="space-x-2 whitespace-nowrap">
                   <button className="btn-outline" onClick={() => setEditing({ ...m })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(m.id!)}>Delete</button>
+                  <button className="btn-danger" onClick={() => del(m.id!, m.code)}>Delete</button>
                 </td>
               </tr>
             ))}
+            {!isLoading && !filtered.length && (
+              <tr><td colSpan={10}><EmptyState title={q ? "No models match your search" : "No models yet"} hint={q ? undefined : "Register a model and bind it to a channel to make it routable."} /></td></tr>
+            )}
           </tbody>
         </table>
       </div>
       {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
-          <div className="card w-[560px] max-h-[90vh] space-y-4 overflow-y-auto">
-            <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} model</h2>
+        <Modal
+          open={!!editing}
+          onClose={() => setEditing(null)}
+          title={`${editing.id ? "Edit" : "New"} model`}
+          width="w-[600px]"
+          footer={
+            <>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
+            </>
+          }
+        >
             <div className="grid grid-cols-2 gap-3">
               <div><label className="label">channel</label>
                 <select className="input w-full" value={editing.channel_id} onChange={(e) => setEditing({ ...editing, channel_id: +e.target.value })}>
@@ -248,15 +273,10 @@ export default function ModelsPage() {
                 )}
               </div>
             )}
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
             </label>
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

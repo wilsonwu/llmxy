@@ -2,6 +2,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { fetcher } from "@/lib/api";
+import { Badge, EmptyState, TableSkeleton } from "@/components/ui";
 
 type Log = {
   id: number; user_facing_model: string; upstream_model: string;
@@ -14,7 +15,7 @@ const PAGE_SIZE = 20;
 
 export default function UsagePage() {
   const [page, setPage] = useState(1);
-  const { data } = useSWR<{ items: Log[]; total: number; page: number; page_size: number }>(
+  const { data, isLoading } = useSWR<{ items: Log[]; total: number; page: number; page_size: number }>(
     `/api/v1/usage/logs?page=${page}&page_size=${PAGE_SIZE}`,
     fetcher
   );
@@ -24,24 +25,25 @@ export default function UsagePage() {
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Usage</h1>
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead>
             <tr><th>Time</th><th>Model</th><th>Upstream</th><th>Kind</th><th>Label</th><th>prompt</th><th>completion</th><th>Cost</th><th>Latency</th><th>Status</th></tr>
           </thead>
           <tbody>
-            {data?.items?.map((l) => (
+            {isLoading && <TableSkeleton cols={10} />}
+            {!isLoading && data?.items?.map((l) => (
               <tr key={l.id}>
                 <td>{new Date(l.created_at).toLocaleString()}</td>
                 <td>{l.user_facing_model}</td>
                 <td>{l.upstream_model}</td>
                 <td>
                   {l.kind === "classifier"
-                    ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">classifier</span>
-                    : <span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-800">relay</span>}
+                    ? <Badge tone="warning">classifier</Badge>
+                    : <Badge tone="info">relay</Badge>}
                 </td>
                 <td>{l.resolved_label
-                  ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">{l.resolved_label}</span>
+                  ? <Badge tone="success">{l.resolved_label}</Badge>
                   : <span className="text-gray-400">-</span>}</td>
                 <td>{l.prompt_tokens}</td>
                 <td>{l.completion_tokens}</td>
@@ -50,7 +52,9 @@ export default function UsagePage() {
                 <td>{l.status}</td>
               </tr>
             ))}
-            {!data?.items?.length && <tr><td colSpan={10} className="text-center text-gray-500">No records</td></tr>}
+            {!isLoading && !data?.items?.length && (
+              <tr><td colSpan={10}><EmptyState title="No usage yet" hint="Requests against /v1/* will appear here as they happen." /></td></tr>
+            )}
           </tbody>
         </table>
       </div>

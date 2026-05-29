@@ -2,6 +2,7 @@
 import useSWR from "swr";
 import { useEffect, useState } from "react";
 import { api, fetcher } from "@/lib/api";
+import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type Mode = "local" | "remote";
 
@@ -40,13 +41,6 @@ const emptyForm: CreateForm = {
   host: "",
   listen_port: 9000,
   admin_port: 9001,
-};
-
-const statusColor: Record<Inst["status"], string> = {
-  running: "bg-green-100 text-green-700",
-  stopped: "bg-gray-100 text-gray-600",
-  starting: "bg-yellow-100 text-yellow-700",
-  error: "bg-red-100 text-red-700",
 };
 
 function TransportBanner({ instances }: { instances: Inst[] | undefined }) {
@@ -203,9 +197,10 @@ function LocalPrecheckPanel({
 }
 
 export default function EnvoyPage() {
-  const { data, mutate } = useSWR<Inst[]>("/api/v1/admin/envoy/instances", fetcher, {
+  const { data, mutate, isLoading } = useSWR<Inst[]>("/api/v1/admin/envoy/instances", fetcher, {
     refreshInterval: 5000,
   });
+  const { toast, confirm } = useToast();
   const [creating, setCreating] = useState<CreateForm | null>(null);
   const [editing, setEditing] = useState<{ id: number; mode: Mode; name: string; host: string; listen_port: number; admin_port: number } | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -282,7 +277,7 @@ export default function EnvoyPage() {
   async function create() {
     if (!creating) return;
     if (creating.mode === "remote" && !creating.host) {
-      alert("Host is required for remote mode. Deploy envoy first using the manifest below, then fill in the reachable address.");
+      toast("Host is required for remote mode. Deploy envoy first using the manifest below, then fill in the reachable address.", "error");
       return;
     }
     const body: any = {
@@ -298,8 +293,9 @@ export default function EnvoyPage() {
       setTestResult(null);
       setPreviewData(null);
       await mutate();
+      toast("Envoy instance created", "success");
     } catch (e: any) {
-      alert(e.message || "create failed");
+      toast(e.message || "create failed", "error");
     }
   }
 
@@ -337,26 +333,29 @@ export default function EnvoyPage() {
       });
       setEditing(null);
       mutate();
+      toast("Instance updated", "success");
     } catch (e: any) {
-      alert(e.message || "update failed");
+      toast(e.message || "update failed", "error");
     }
   }
 
   async function act(id: number, op: string) {
     try {
       await api(`/api/v1/admin/envoy/instances/${id}/${op}`, { method: "POST" });
+      toast(`${op} sent`, "success");
     } catch (e: any) {
-      alert(e.message || "operation failed");
+      toast(e.message || "operation failed", "error");
     }
     mutate();
   }
 
-  async function del(id: number) {
-    if (!confirm("Delete this envoy instance? (local instances must be stopped first)")) return;
+  async function del(id: number, name: string) {
+    if (!(await confirm({ title: "Delete envoy instance", body: `Delete "${name}"? Local instances must be stopped first.`, danger: true, confirmText: "Delete" }))) return;
     try {
       await api(`/api/v1/admin/envoy/instances/${id}`, { method: "DELETE" });
+      toast("Instance deleted", "success");
     } catch (e: any) {
-      alert(e.message);
+      toast(e.message || "Delete failed", "error");
     }
     mutate();
   }
@@ -393,7 +392,7 @@ export default function EnvoyPage() {
 
       <TransportBanner instances={data} />
 
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead>
             <tr>
@@ -403,32 +402,30 @@ export default function EnvoyPage() {
             </tr>
           </thead>
           <tbody>
-            {(data || []).map((i) => (
+            {isLoading && <TableSkeleton cols={10} />}
+            {!isLoading && (data || []).map((i) => (
               <tr key={i.id}>
                 <td>{i.id}</td>
                 <td className="font-medium">{i.name}</td>
                 <td>
-                  <span className={`rounded px-2 py-0.5 text-xs ${i.mode === "remote" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>
-                    {i.mode}
-                  </span>
+                  <Badge tone={i.mode === "remote" ? "purple" : "info"}>{i.mode}</Badge>
                 </td>
                 <td className="font-mono text-xs">{i.node_id}</td>
                 <td>
                   <button
-                    className="font-mono text-xs text-blue-600 hover:underline"
+                    className="font-mono text-xs text-brand-600 hover:underline"
                     title="Click to copy"
-                    onClick={() => { navigator.clipboard.writeText(i.proxy_url); }}
+                    onClick={() => { navigator.clipboard.writeText(i.proxy_url); toast("URL copied", "info"); }}
+                    aria-label={`Copy proxy URL ${i.proxy_url}`}
                   >
                     {i.proxy_url}
                   </button>
                 </td>
                 <td>
                   {i.mode === "remote" ? (
-                    <span className={`rounded px-2 py-0.5 text-xs ${remoteOnline(i) ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-                      {remoteOnline(i) ? "online" : "offline"}
-                    </span>
+                    <Badge tone={remoteOnline(i) ? "success" : "neutral"}>{remoteOnline(i) ? "online" : "offline"}</Badge>
                   ) : (
-                    <span className={`rounded px-2 py-0.5 text-xs ${statusColor[i.status]}`}>{i.status}</span>
+                    <Badge tone={i.status === "running" ? "success" : i.status === "starting" ? "warning" : i.status === "error" ? "danger" : "neutral"}>{i.status}</Badge>
                   )}
                 </td>
                 <td className="font-mono text-xs text-gray-600">{i.version || "—"}</td>
@@ -502,12 +499,12 @@ export default function EnvoyPage() {
                       </>
                     )}
                   </span>
-                  <button className="btn-danger" onClick={() => del(i.id)}>Del</button>
+                  <button className="btn-danger" onClick={() => del(i.id, i.name)}>Del</button>
                 </td>
               </tr>
             ))}
-            {(!data || data.length === 0) && (
-              <tr><td colSpan={9} className="text-center text-gray-500">No instances. Create one to get started.</td></tr>
+            {!isLoading && (!data || data.length === 0) && (
+              <tr><td colSpan={10}><EmptyState title="No envoy instances" hint="Create one to spawn a managed subprocess or register a remote envoy via xDS." /></td></tr>
             )}
           </tbody>
         </table>
@@ -776,9 +773,18 @@ export default function EnvoyPage() {
       )}
 
       {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className="card w-[460px] space-y-3">
-            <h2 className="text-lg font-semibold">Edit envoy instance</h2>
+        <Modal
+          open={!!editing}
+          onClose={() => setEditing(null)}
+          title="Edit envoy instance"
+          width="w-[460px]"
+          footer={
+            <>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={saveEdit} disabled={!editing.name}>Save</button>
+            </>
+          }
+        >
             <div>
               <label className="label">Mode</label>
               <input className="input w-full bg-gray-100" value={editing.mode} disabled />
@@ -832,12 +838,7 @@ export default function EnvoyPage() {
                 Port changes only take effect after restart.
               </p>
             )}
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={saveEdit} disabled={!editing.name}>Save</button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {drawer && (

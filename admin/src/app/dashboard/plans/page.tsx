@@ -2,25 +2,35 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
+import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type P = { id?: number; code: string; name: string; description?: string; plan_type: "recurring" | "one_time"; price_cents: number; quota_cents: number; duration_days: number; max_purchases_per_user?: number | null; active: boolean };
 const empty: P = { code: "", name: "", description: "", plan_type: "recurring", price_cents: 0, quota_cents: 0, duration_days: 30, max_purchases_per_user: null, active: true };
 
 export default function PlansPage() {
-  const { data, mutate } = useSWR<P[]>("/api/v1/admin/plans", fetcher);
+  const { data, mutate, isLoading } = useSWR<P[]>("/api/v1/admin/plans", fetcher);
   const [editing, setEditing] = useState<P | null>(null);
+  const { toast, confirm } = useToast();
 
   async function save(p: P) {
-    // recurring plans ignore max_purchases_per_user; strip it so the server
-    // doesn't see stale UI state if the operator switched type mid-edit.
     const payload = p.plan_type === "recurring" ? { ...p, max_purchases_per_user: null } : p;
-    if (p.id) await api(`/api/v1/admin/plans/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
-    else await api(`/api/v1/admin/plans`, { method: "POST", body: JSON.stringify(payload) });
-    setEditing(null); mutate();
+    try {
+      if (p.id) await api(`/api/v1/admin/plans/${p.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await api(`/api/v1/admin/plans`, { method: "POST", body: JSON.stringify(payload) });
+      setEditing(null);
+      mutate();
+      toast(p.id ? "Plan updated" : "Plan created", "success");
+    } catch (e: any) {
+      toast(e?.message || "Save failed", "error");
+    }
   }
-  async function del(id: number) {
-    if (!confirm("Delete this plan?")) return;
-    await api(`/api/v1/admin/plans/${id}`, { method: "DELETE" }); mutate();
+  async function del(id: number, name: string) {
+    if (!(await confirm({ title: "Delete plan", body: `Delete "${name}"? Active subscriptions keep running until they expire.`, danger: true, confirmText: "Delete" }))) return;
+    try {
+      await api(`/api/v1/admin/plans/${id}`, { method: "DELETE" });
+      mutate();
+      toast("Plan deleted", "success");
+    } catch (e: any) { toast(e?.message || "Delete failed", "error"); }
   }
   return (
     <div className="space-y-4">
@@ -28,32 +38,46 @@ export default function PlansPage() {
         <h1 className="text-2xl font-bold">Plans</h1>
         <button className="btn-primary" onClick={() => setEditing({ ...empty })}>New</button>
       </div>
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Type</th><th>Price</th><th>Quota</th><th>Duration</th><th>Limit</th><th>Active</th><th></th></tr></thead>
           <tbody>
-            {data?.map((p) => (
+            {isLoading && <TableSkeleton cols={10} />}
+            {!isLoading && data?.map((p) => (
               <tr key={p.id}>
-                <td>{p.id}</td><td>{p.code}</td><td>{p.name}</td>
-                <td>{p.plan_type === "one_time" ? "one-time" : "monthly"}</td>
+                <td>{p.id}</td><td>{p.code}</td><td className="font-medium">{p.name}</td>
+                <td>{p.plan_type === "one_time" ? <Badge tone="purple">one-time</Badge> : <Badge tone="info">monthly</Badge>}</td>
                 <td>${(p.price_cents/100).toFixed(2)}{p.plan_type === "recurring" && <span className="text-xs text-gray-500"> /mo</span>}</td>
                 <td>${(p.quota_cents/100).toFixed(2)}</td>
                 <td>{p.plan_type === "one_time" ? `${p.duration_days}d` : "—"}</td>
                 <td>{p.plan_type === "one_time" ? (p.max_purchases_per_user == null ? "∞" : `${p.max_purchases_per_user}×`) : "—"}</td>
-                <td>{p.active ? "✓" : "—"}</td>
-                <td className="space-x-2">
+                <td>{p.active ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
+                <td className="space-x-2 whitespace-nowrap">
                   <button className="btn-outline" onClick={() => setEditing({ ...p })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(p.id!)}>Delete</button>
+                  <button className="btn-danger" onClick={() => del(p.id!, p.name)}>Delete</button>
                 </td>
               </tr>
             ))}
+            {!isLoading && !data?.length && (
+              <tr><td colSpan={10}><EmptyState title="No plans yet" hint="Define subscription tiers that users can subscribe to on the pricing page." /></td></tr>
+            )}
           </tbody>
         </table>
       </div>
-      {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className="card w-[500px] space-y-3">
-            <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} plan</h2>
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={`${editing?.id ? "Edit" : "New"} plan`}
+        width="w-[520px]"
+        footer={
+          <>
+            <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+            <button className="btn-primary" onClick={() => editing && save(editing)}>Save</button>
+          </>
+        }
+      >
+        {editing && (
+          <>
             {(["code", "name", "description"] as const).map((k) => (
               <div key={k}><label className="label">{k}</label>
                 <input className="input w-full" value={(editing as any)[k] || ""} onChange={(e) => setEditing({ ...editing, [k]: e.target.value })} /></div>
@@ -91,16 +115,12 @@ export default function PlansPage() {
                 <p className="text-xs text-gray-500 mt-1">Counts all historical purchases (active/expired/canceled). Use 1 for free trials.</p>
               </div>
             )}
-            <label className="flex items-center gap-2">
+            <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={editing.active} onChange={(e) => setEditing({ ...editing, active: e.target.checked })} /> Active
             </label>
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={() => save(editing)}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

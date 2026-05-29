@@ -3,6 +3,7 @@ import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 import { COUNTRIES, COUNTRY_NAME } from "@/lib/countries";
+import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type Target = { model_id: number; weight: number; fallback_order: number; label?: string | null };
 type Rule =
@@ -78,11 +79,12 @@ const PRESET_BY_ID = Object.fromEntries(PRESETS.map((p) => [p.id, p]));
 const DEFAULT_LABEL = "default";
 
 export default function RoutesPage() {
-  const { data, mutate } = useSWR<R[]>("/api/v1/admin/routes", fetcher);
+  const { data, mutate, isLoading } = useSWR<R[]>("/api/v1/admin/routes", fetcher);
   const { data: models } = useSWR<M[]>("/api/v1/admin/models", fetcher);
   const embeddingModels = (models || []).filter((m) => m.kind === "embedding");
   const [editing, setEditing] = useState<R | null>(null);
   const [q, setQ] = useState("");
+  const { toast, confirm } = useToast();
   const filtered = (data || []).filter(r => !q || r.user_facing_model.toLowerCase().includes(q.toLowerCase()));
 
   async function save(r: R) {
@@ -95,22 +97,24 @@ export default function RoutesPage() {
     } else {
       payload.smart_default_label = DEFAULT_LABEL;
     }
-    if (r.id) await api(`/api/v1/admin/routes/${r.id}`, { method: "PUT", body: JSON.stringify(payload) });
-    else await api(`/api/v1/admin/routes`, { method: "POST", body: JSON.stringify(payload) });
-    setEditing(null);
-    mutate();
+    try {
+      if (r.id) await api(`/api/v1/admin/routes/${r.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await api(`/api/v1/admin/routes`, { method: "POST", body: JSON.stringify(payload) });
+      setEditing(null);
+      mutate();
+      toast(r.id ? "Route updated" : "Route created", "success");
+    } catch (e: any) { toast(e?.message || "Save failed", "error"); }
   }
-  async function del(id: number) {
-    if (!confirm("Delete this route?")) return;
-    await api(`/api/v1/admin/routes/${id}`, { method: "DELETE" });
-    mutate();
+  async function del(id: number, name: string) {
+    if (!(await confirm({ title: "Delete route", body: `Delete route "${name}"? Clients calling this public model name will start to fail.`, danger: true, confirmText: "Delete" }))) return;
+    try {
+      await api(`/api/v1/admin/routes/${id}`, { method: "DELETE" });
+      mutate();
+      toast("Route deleted", "success");
+    } catch (e: any) { toast(e?.message || "Delete failed", "error"); }
   }
   const modelLabel = (id: number) => models?.find((m) => m.id === id)?.code || `#${id}`;
-  const MODALITY_BADGE: Record<string, string> = {
-    chat: "bg-blue-100 text-blue-700",
-    embedding: "bg-teal-100 text-teal-700",
-    image: "bg-purple-100 text-purple-700",
-  };
+  const modalityTone = (m: string) => m === "image" ? "purple" : m === "embedding" ? "brand" : "info";
 
   const renderTargetSummary = (r: R) =>
     r.targets_jsonb.map((t, i) => {
@@ -144,20 +148,19 @@ export default function RoutesPage() {
         ))}
       </div>
 
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead>
             <tr><th>ID</th><th>Public model</th><th>Strategy</th><th>Scope</th><th>targets</th><th>Enabled</th><th></th></tr>
           </thead>
           <tbody>
-            {filtered.map((r) => (
+            {isLoading && <TableSkeleton cols={7} />}
+            {!isLoading && filtered.map((r) => (
               <tr key={r.id}>
                 <td>{r.id}</td>
                 <td>
-                  {r.user_facing_model}
-                  <span className={`ml-1 rounded px-1.5 py-0.5 text-xs ${MODALITY_BADGE[r.modality || "chat"]}`}>
-                    {r.modality || "chat"}
-                  </span>
+                  <span className="mr-1">{r.user_facing_model}</span>
+                  <Badge tone={modalityTone(r.modality || "chat")}>{r.modality || "chat"}</Badge>
                 </td>
                 <td>
                   {r.strategy}
@@ -166,13 +169,11 @@ export default function RoutesPage() {
                   )}
                 </td>
                 <td>
-                  <span className={`rounded px-2 py-0.5 text-xs ${r.scope === "private" ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}`}>
-                    {r.scope}
-                  </span>
+                  <Badge tone={r.scope === "private" ? "warning" : "success"}>{r.scope}</Badge>
                 </td>
                 <td className="text-xs">{renderTargetSummary(r)}</td>
-                <td>{r.enabled ? "✓" : "—"}</td>
-                <td className="space-x-2">
+                <td>{r.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
+                <td className="space-x-2 whitespace-nowrap">
                   <button className="btn-outline" onClick={() => setEditing({
                     ...r,
                     targets_jsonb: [...r.targets_jsonb],
@@ -181,10 +182,13 @@ export default function RoutesPage() {
                     smart_score_threshold: r.smart_score_threshold ?? 55,
                     modality: r.modality || "chat",
                   })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(r.id!)}>Delete</button>
+                  <button className="btn-danger" onClick={() => del(r.id!, r.user_facing_model)}>Delete</button>
                 </td>
               </tr>
             ))}
+            {!isLoading && !filtered.length && (
+              <tr><td colSpan={7}><EmptyState title={q ? "No routes match your search" : "No routes yet"} hint={q ? undefined : "Create one to expose a public model name backed by one or more upstream models."} /></td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -297,10 +301,18 @@ export default function RoutesPage() {
         );
 
         return (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
-          <div className="card max-h-[90vh] w-[760px] space-y-4 overflow-y-auto">
-            <h2 className="text-lg font-semibold">{e.id ? "Edit" : "New"} route</h2>
-
+        <Modal
+          open={!!editing}
+          onClose={() => setEditing(null)}
+          title={`${e.id ? "Edit" : "New"} route`}
+          width="w-[760px]"
+          footer={
+            <>
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={() => save(e)}>Save</button>
+            </>
+          }
+        >
             <div>
               <label className="label">Public model name</label>
               <input className="input w-full" value={e.user_facing_model}
@@ -633,12 +645,7 @@ export default function RoutesPage() {
                 onChange={(ev) => setEditing({ ...e, enabled: ev.target.checked })} />
               Enabled
             </label>
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
-              <button className="btn-primary" onClick={() => save(e)}>Save</button>
-            </div>
-          </div>
-        </div>
+        </Modal>
         );
       })()}
     </div>
