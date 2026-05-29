@@ -297,23 +297,14 @@ export default function RoutesPage() {
         );
 
         return (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className="card max-h-[90vh] w-[760px] space-y-3 overflow-y-auto">
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
+          <div className="card max-h-[90vh] w-[760px] space-y-4 overflow-y-auto">
             <h2 className="text-lg font-semibold">{e.id ? "Edit" : "New"} route</h2>
 
             <div>
               <label className="label">Public model name</label>
               <input className="input w-full" value={e.user_facing_model}
                 onChange={(ev) => setEditing({ ...e, user_facing_model: ev.target.value })} />
-            </div>
-
-            <div>
-              <label className="label">Scope (visibility)</label>
-              <select className="input w-full" value={e.scope}
-                onChange={(ev) => setEditing({ ...e, scope: ev.target.value as R["scope"] })}>
-                <option value="public">public — listed in /v1/models and callable by users</option>
-                <option value="private">private — hidden &amp; not user-callable</option>
-              </select>
             </div>
 
             <div>
@@ -376,17 +367,32 @@ export default function RoutesPage() {
                     }
                   };
                   return (
-                    <div className="inline-flex overflow-hidden rounded border bg-white text-xs">
-                      <button
-                        className={`px-3 py-1 ${smartMode === "rules" ? "bg-blue-600 text-white" : "text-gray-700"}`}
-                        onClick={() => switchMode("rules")}>Rules</button>
-                      <button
-                        className={`px-3 py-1 ${smartMode === "embedding" ? "bg-blue-600 text-white" : "text-gray-700"}`}
-                        onClick={() => switchMode("embedding")}
-                        disabled={embeddingModels.length === 0}
-                        title={embeddingModels.length === 0 ? "Register an embedding model first" : ""}>
-                        Embedding classifier
-                      </button>
+                    <div className="space-y-1">
+                      <div className="inline-flex overflow-hidden rounded border bg-white text-xs">
+                        <button
+                          className={`px-3 py-1 ${smartMode === "rules" ? "bg-blue-600 text-white" : "text-gray-700"}`}
+                          onClick={() => switchMode("rules")}>Rules</button>
+                        <button
+                          className={`px-3 py-1 ${
+                            smartMode === "embedding"
+                              ? "bg-blue-600 text-white"
+                              : embeddingModels.length === 0
+                                ? "cursor-not-allowed text-gray-300"
+                                : "text-gray-700"
+                          }`}
+                          onClick={() => switchMode("embedding")}
+                          disabled={embeddingModels.length === 0}
+                          title={embeddingModels.length === 0 ? "Register an embedding model first (Models page → kind=embedding)" : ""}>
+                          Embedding classifier
+                        </button>
+                      </div>
+                      {embeddingModels.length === 0 && (
+                        <p className="text-xs text-amber-700">
+                          Embedding classifier is disabled because no embedding model is registered. Add one on the{" "}
+                          <a href="/dashboard/models" className="font-medium underline">Models</a> page with{" "}
+                          <code>kind=embedding</code> (e.g. <code>text-embedding-3-small</code>), then it becomes selectable here.
+                        </p>
+                      )}
                     </div>
                   );
                 })()}
@@ -612,6 +618,15 @@ export default function RoutesPage() {
             )}
 
             {e.strategy === "smart" && renderTargets()}
+
+            <div>
+              <label className="label">Scope (visibility)</label>
+              <select className="input w-full" value={e.scope}
+                onChange={(ev) => setEditing({ ...e, scope: ev.target.value as R["scope"] })}>
+                <option value="public">public — listed in /v1/models and callable by users</option>
+                <option value="private">private — hidden &amp; not user-callable</option>
+              </select>
+            </div>
 
             <label className="flex items-center gap-2">
               <input type="checkbox" checked={e.enabled}

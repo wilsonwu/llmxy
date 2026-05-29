@@ -186,13 +186,9 @@ export default function ModelsPage() {
       </div>
       {editing && (
         <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
-          <div className="card w-[560px] max-h-[88vh] overflow-y-auto space-y-3">
+          <div className="card w-[560px] max-h-[90vh] space-y-4 overflow-y-auto">
             <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} model</h2>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">code (public-facing name)</label>
-                <input className="input w-full" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value })} /></div>
-              <div><label className="label">display_name</label>
-                <input className="input w-full" value={editing.display_name} onChange={(e) => setEditing({ ...editing, display_name: e.target.value })} /></div>
               <div><label className="label">channel</label>
                 <select className="input w-full" value={editing.channel_id} onChange={(e) => setEditing({ ...editing, channel_id: +e.target.value })}>
                   {channels?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -210,6 +206,10 @@ export default function ModelsPage() {
                   <option value="">(auto — channel default)</option>
                   {(editing.kind === "image" ? IMAGE_PROTOCOLS : editing.kind === "embedding" ? EMBEDDING_PROTOCOLS : CHAT_PROTOCOLS).map((p) => <option key={p} value={p}>{p}</option>)}
                 </select></div>
+              <div><label className="label">code (public-facing name)</label>
+                <input className="input w-full" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value })} /></div>
+              <div><label className="label">display_name</label>
+                <input className="input w-full" value={editing.display_name} onChange={(e) => setEditing({ ...editing, display_name: e.target.value })} /></div>
             </div>
             <p className="text-xs text-gray-500">Protocol selects the upstream translation adapter; one channel can host mixed protocols (e.g. Azure AI Foundry). Leave on auto to use the channel&apos;s provider type.</p>
 
@@ -237,25 +237,20 @@ export default function ModelsPage() {
             </div>
 
             {editing.kind === "image" ? (
-              <>
-                <ImagePricingEditor pricing={editing.pricing_jsonb || {}} onChange={(p) => setEditing({ ...editing, pricing_jsonb: p })} />
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
-                </label>
-              </>
+              <ImagePricingEditor pricing={editing.pricing_jsonb || {}} onChange={(p) => setEditing({ ...editing, pricing_jsonb: p })} />
             ) : (
-              <div className="flex gap-3 items-end">
+              <div className="flex gap-3">
                 <div className="flex-1"><label className="label">prompt_rate</label>
                   <input type="number" className="input w-full" value={editing.prompt_rate} onChange={(e) => setEditing({ ...editing, prompt_rate: +e.target.value })} /></div>
                 {editing.kind !== "embedding" && (
                   <div className="flex-1"><label className="label">completion_rate</label>
                     <input type="number" className="input w-full" value={editing.completion_rate} onChange={(e) => setEditing({ ...editing, completion_rate: +e.target.value })} /></div>
                 )}
-                <label className="flex items-center gap-2 pb-2">
-                  <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
-                </label>
               </div>
             )}
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
+            </label>
             <div className="flex justify-end gap-2">
               <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
               <button className="btn-primary" onClick={() => save(editing)}>Save</button>

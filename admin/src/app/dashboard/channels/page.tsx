@@ -59,15 +59,15 @@ export default function ChannelsPage() {
         </table>
       </div>
       {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className="card w-[500px] space-y-3">
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
+          <div className="card w-[480px] max-h-[90vh] space-y-4 overflow-y-auto">
             <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} channel</h2>
             <div>
               <label className="label">Name</label>
               <input className="input w-full" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
             </div>
             <div>
-              <label className="label">Upstream protocol</label>
+              <label className="label">Provider type (channel default protocol)</label>
               <select className="input w-full" value={editing.provider_type} onChange={(e) => setEditing({ ...editing, provider_type: e.target.value })}>
                 {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
@@ -80,12 +80,10 @@ export default function ChannelsPage() {
               <label className="label">API Key</label>
               <input className="input w-full" type="password" value={editing.api_key_enc || ""} onChange={(e) => setEditing({ ...editing, api_key_enc: e.target.value })} />
             </div>
-            <div className="flex gap-3">
-              <label className="flex items-center gap-2 pt-1">
-                <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
-                Enabled
-              </label>
-            </div>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
+              Enabled
+            </label>
             <div className="flex justify-end gap-2">
               <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
               <button className="btn-primary" onClick={() => save(editing)}>Save</button>
