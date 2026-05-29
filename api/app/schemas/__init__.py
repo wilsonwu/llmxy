@@ -148,9 +148,11 @@ class ModelIn(BaseModel):
     display_name: str
     channel_id: int
     upstream_model: str
-    kind: str = "chat"  # "chat" | "embedding"
+    kind: str = "chat"  # "chat" | "embedding" | "image"
+    upstream_protocol: Optional[str] = None  # per-model upstream protocol override
     prompt_rate: int = 0  # micro-cent / 1K tokens
     completion_rate: int = 0
+    pricing_jsonb: dict = {}  # modality pricing; see Model.pricing_jsonb
     enabled: bool = True
 
 
@@ -189,6 +191,7 @@ class RouteExemplar(BaseModel):
 
 class RoutePolicyIn(BaseModel):
     user_facing_model: str
+    modality: str = "chat"  # chat | embedding | image
     strategy: str = "weighted"  # weighted/smart/fallback
     targets_jsonb: list[RouteTarget] = []
     smart_rules_jsonb: list[RouteRule] = []
@@ -203,6 +206,7 @@ class RoutePolicyIn(BaseModel):
 class RoutePolicyOut(BaseModel):
     id: int
     user_facing_model: str
+    modality: str = "chat"
     strategy: str
     targets_jsonb: list[dict]
     smart_rules_jsonb: list[dict] = []

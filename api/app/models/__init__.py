@@ -207,13 +207,29 @@ class Model(Base):
     display_name: Mapped[str] = mapped_column(String(128))
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
     upstream_model: Mapped[str] = mapped_column(String(128))  # real upstream model name
-    # "chat" (default) or "embedding". Smart-routing exemplar embeddings use kind=embedding.
+    # "chat" (default) | "embedding" | "image". Smart-routing exemplar
+    # embeddings use kind=embedding. Image models bill via pricing_jsonb.
     kind: Mapped[str] = mapped_column(String(16), default="chat", nullable=False)
+    # Per-model upstream wire-protocol override; selects the translation
+    # adapter (openai/azure/anthropic/gemini for chat; openai/azure/gemini for
+    # image). NULL falls back to the channel's provider_type, so one channel
+    # can host models of different protocols (e.g. Azure AI Foundry serves both
+    # azure-openai gpt-* and openai-compatible Llama/DeepSeek deployments).
+    upstream_protocol: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     # rate per 1K tokens, stored as 1/10000 cents for precision (i.e. micro-cents).
     # cost_cents = ceil((prompt*pr + completion*cr) / 10000 / 1000)
     # For embedding models completion_rate is ignored.
     prompt_rate: Mapped[int] = mapped_column(BigInteger, default=0)
     completion_rate: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Modality-specific pricing. Empty {} = token-based (chat/embedding).
+    # image per_image mode:
+    #   {"mode":"per_image",
+    #    "tiers":[{"size":"1024x1024","quality":"standard","price_micro":400000}, ...],
+    #    "default_price_micro":400000}
+    # image token mode (gpt-image-1 style): uses prompt_rate/completion_rate plus
+    #   {"mode":"token","output_tokens":{"1024x1024|high":4160,...},"default_out_tokens":1056}
+    # price_micro / out_tokens are per single image; total scales by n.
+    pricing_jsonb: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -223,6 +239,11 @@ class RoutePolicy(Base):
     __tablename__ = "route_policies"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_facing_model: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # Forwarding modality this route serves: "chat" | "embedding" | "image".
+    # Each modality is independent; all targets must be models of this kind,
+    # and only the matching endpoint (/v1/chat/completions, /v1/embeddings,
+    # /v1/images/generations) will resolve it.
+    modality: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat", nullable=False)
     strategy: Mapped[RouteStrategy] = mapped_column(SAEnum(RouteStrategy), default=RouteStrategy.weighted)
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # targets: [{model_id:int, weight:int, fallback_order:int, label?:str}]
@@ -260,6 +281,10 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_cents: Mapped[int] = mapped_column(Integer, default=0)
+    # Images actually billed for this row (0 for token modalities).
+    image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Modality detail: {"size":..., "quality":..., "requested_n":..., "mode":...}.
+    meta_jsonb: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(32), default="ok")
     request_id: Mapped[Optional[str]] = mapped_column(String(64))

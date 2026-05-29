@@ -75,3 +75,19 @@ class OpenAIAdapter:
                 return r.status_code, r.json()
             except Exception:
                 return r.status_code, {"error": {"message": r.text}}
+
+    async def images(self, channel: Channel, upstream_model: str, payload: dict) -> tuple[int, dict]:
+        from app.core.config import settings
+        body = dict(payload); body["model"] = upstream_model
+        url = self._url(channel, "/images/generations")
+        try:
+            async with httpx.AsyncClient(timeout=settings.IMAGE_RELAY_TIMEOUT) as cli:
+                r = await cli.post(url, json=body, headers=self._headers(channel))
+                try:
+                    return r.status_code, r.json()
+                except Exception:
+                    return r.status_code, {"error": {"message": r.text}}
+        except httpx.TimeoutException:
+            return 504, {"error": {"message": "upstream image generation timed out", "type": "timeout"}}
+        except Exception as e:  # network/DNS/etc — caller refunds the hold
+            return 502, {"error": {"message": str(e), "type": "upstream_error"}}

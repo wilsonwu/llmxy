@@ -12,6 +12,7 @@ from app.api.internal import relay as internal_relay
 from app.api.internal import translate as internal_translate
 from app.api.relay import chat as relay_chat
 from app.api.relay import embeddings as relay_embeddings
+from app.api.relay import images as relay_images
 from app.api.relay import models_list as relay_models
 from app.api.v1 import api_keys, auth, models as v1_models, orders, plans, subscriptions, transport, usage
 from app.api.v1.admin import channels as admin_channels
@@ -172,6 +173,7 @@ app.include_router(admin_envoy.router, prefix=ADMIN)
 # OpenAI-compatible relay (root /v1/*)
 app.include_router(relay_chat.router)
 app.include_router(relay_embeddings.router)
+app.include_router(relay_images.router)
 app.include_router(relay_models.router)
 
 # internal (envoy ext_authz / translator); bound to 127.0.0.1 in prod via

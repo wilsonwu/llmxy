@@ -154,7 +154,20 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
 
         m, c = decision.model, decision.channel
         rid = request.headers.get("x-request-id") or f"req-{uuid.uuid4().hex[:16]}"
-        cluster = _channel_cluster_name(c.id) if _is_direct(c) else "translator"
+        # Effective upstream protocol is chosen per-model (so a single channel
+        # can host models of different protocols, e.g. Azure AI Foundry),
+        # falling back to the channel's provider_type when unset.
+        eff_protocol = (m.upstream_protocol or c.provider_type or "openai").lower()
+        # Envoy can only proxy OpenAI-compatible traffic directly; any other
+        # protocol must be translated by our FastAPI translator cluster.
+        direct = eff_protocol == "openai" and _is_direct(c)
+        cluster = _channel_cluster_name(c.id) if direct else "translator"
+        # Image models must run through our FastAPI translator regardless of
+        # protocol: billing is synchronous hold/reconcile (no token usage
+        # for ALS to bill on), so we never let Envoy proxy images directly.
+        if m.kind == "image":
+            cluster = "translator"
+            direct = False
 
         headers: dict[str, str] = {
             "x-llmxy-cluster": cluster,
@@ -165,10 +178,22 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
             "x-llmxy-user-facing-model": model_name,
             "x-llmxy-upstream-model": m.upstream_model,
             "x-llmxy-provider-type": (c.provider_type or "").lower(),
+            "x-llmxy-upstream-protocol": eff_protocol,
             "x-llmxy-channel-id": str(c.id),
         }
         if decision.chosen_label:
             headers["x-llmxy-resolved-label"] = decision.chosen_label
+
+        # Image failover chain: forward the full [primary, *fallback] as
+        # "modelId:channelId" pairs so the translator can retry the next
+        # upstream on error (the data plane can't proxy-retry images itself
+        # since they're billed synchronously). Keeps the ext_authz routing
+        # decision (incl. geo/smart) authoritative across both call paths.
+        if m.kind == "image":
+            pairs = [(m, c)] + (decision.fallback_chain or [])
+            headers["x-llmxy-image-chain"] = ",".join(
+                f"{mm.id}:{cc.id}" for mm, cc in pairs
+            )
 
         # Smart-mode embedding-classifier overhead: forwarded as headers so
         # ALS can write the classifier UsageLog + charge in the SAME PG
@@ -187,7 +212,7 @@ async def authz(full_path: str, request: Request, authorization: str | None = He
         # Inject upstream credentials only for direct (OpenAI-compat) clusters.
         # Translator cluster reaches our own FastAPI which holds the channel
         # already and will use channel.api_key_enc itself.
-        if _is_direct(c):
+        if direct:
             upstream_key = decrypt(c.api_key_enc) or ""
             if upstream_key:
                 headers["authorization"] = f"Bearer {upstream_key}"

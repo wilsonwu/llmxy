@@ -156,3 +156,6 @@ class AnthropicAdapter:
 
     async def embeddings(self, channel: Channel, upstream_model: str, payload: dict) -> tuple[int, dict]:
         return 501, {"error": {"message": "Anthropic does not provide embeddings"}}
+
+    async def images(self, channel: Channel, upstream_model: str, payload: dict) -> tuple[int, dict]:
+        return 501, {"error": {"message": "Anthropic does not provide image generation"}}

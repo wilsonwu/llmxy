@@ -178,3 +178,8 @@ class GeminiAdapter:
                 "usage": {"prompt_tokens": 0, "total_tokens": 0},
             }
             return 200, out
+
+    async def images(self, channel: Channel, upstream_model: str, payload: dict) -> tuple[int, dict]:
+        # Gemini Imagen uses a distinct predict API; OpenAI-shape translation
+        # is a Phase 3 item.
+        return 501, {"error": {"message": "Gemini image generation not yet supported"}}

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 
-type Model = { id: string; strategy: string; target_count: number };
+type Model = { id: string; modality?: "chat" | "embedding" | "image"; strategy: string; target_count: number };
 type Key = { id: number; name: string; key_prefix: string; status: string };
 type EnvoyInst = { name: string; mode: string; listen_port: number; proxy_url: string };
 type Transport = {
@@ -14,7 +14,7 @@ type Gateway = { id: string; label: string; url: string; hint?: string };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-type Tab = "chat" | "chat-stream" | "embeddings";
+type Tab = "chat" | "chat-stream" | "embeddings" | "image";
 
 function buildCurl(tab: Tab, base: string, key: string, model: string) {
   const auth = `-H "Authorization: Bearer ${key}"`;
@@ -22,6 +22,10 @@ function buildCurl(tab: Tab, base: string, key: string, model: string) {
   if (tab === "embeddings") {
     const body = JSON.stringify({ model, input: "hello world" });
     return `curl ${base}/v1/embeddings \\\n  ${auth} \\\n  ${ct} \\\n  -d '${body}'`;
+  }
+  if (tab === "image") {
+    const body = JSON.stringify({ model, prompt: "a red panda coding", n: 1, size: "1024x1024" });
+    return `curl ${base}/v1/images/generations \\\n  ${auth} \\\n  ${ct} \\\n  -d '${body}'`;
   }
   const payload: Record<string, unknown> = {
     model,
@@ -47,6 +51,22 @@ const res = await client.embeddings.create({
 });
 console.log(res.data[0].embedding.length);`;
   }
+  if (tab === "image") {
+    return `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "${key}",
+  baseURL: "${base}/v1",
+});
+
+const res = await client.images.generate({
+  model: "${model}",
+  prompt: "a red panda coding",
+  n: 1,
+  size: "1024x1024",
+});
+console.log(res.data[0].url);`;
+  }
   const streamFlag = tab === "chat-stream" ? "\n  stream: true," : "";
   return `import OpenAI from "openai";
 
@@ -69,6 +89,18 @@ function buildPy(tab: Tab, base: string, key: string, model: string) {
 client = OpenAI(api_key="${key}", base_url="${base}/v1")
 res = client.embeddings.create(model="${model}", input="hello world")
 print(len(res.data[0].embedding))`;
+  }
+  if (tab === "image") {
+    return `from openai import OpenAI
+
+client = OpenAI(api_key="${key}", base_url="${base}/v1")
+res = client.images.generate(
+    model="${model}",
+    prompt="a red panda coding",
+    n=1,
+    size="1024x1024",
+)
+print(res.data[0].url)`;
   }
   const stream = tab === "chat-stream";
   return `from openai import OpenAI
@@ -115,22 +147,29 @@ export default function ModelsPage() {
   const activeBase = activeGateway?.url || API_BASE;
 
   const activeModel = model || models?.[0]?.id || "<model-name>";
+  const activeModality = useMemo(() => {
+    const m = (models || []).find((x) => x.id === activeModel);
+    return m?.modality || "chat";
+  }, [models, activeModel]);
   const activeKey = useMemo(() => {
     const k = (keys || []).find((x) => String(x.id) === keyId);
     if (k) return `${k.key_prefix}...`;
     return "sk-xxxxxxxx";
   }, [keys, keyId]);
 
-  const snippet = useMemo(() => {
-    if (lang === "js") return buildJs(tab, activeBase, activeKey, activeModel);
-    if (lang === "py") return buildPy(tab, activeBase, activeKey, activeModel);
-    return buildCurl(tab, activeBase, activeKey, activeModel);
-  }, [lang, tab, activeBase, activeKey, activeModel]);
+  const filteredTabs: Tab[] =
+    activeModality === "image"
+      ? ["image"]
+      : activeModality === "embedding"
+      ? ["embeddings"]
+      : ["chat", "chat-stream"];
+  const effectiveTab: Tab = filteredTabs.includes(tab) ? tab : filteredTabs[0];
 
-  const isEmbeddingModel = (id: string) => /embed/i.test(id);
-  const filteredTabs: Tab[] = isEmbeddingModel(activeModel)
-    ? ["embeddings"]
-    : ["chat", "chat-stream", "embeddings"];
+  const snippet = useMemo(() => {
+    if (lang === "js") return buildJs(effectiveTab, activeBase, activeKey, activeModel);
+    if (lang === "py") return buildPy(effectiveTab, activeBase, activeKey, activeModel);
+    return buildCurl(effectiveTab, activeBase, activeKey, activeModel);
+  }, [lang, effectiveTab, activeBase, activeKey, activeModel]);
 
   async function copy() {
     try {
@@ -163,6 +202,13 @@ export default function ModelsPage() {
                   ? `${m.target_count} providers, ordered fallback`
                   : `${m.target_count} providers, load-balanced`
                 : "single provider";
+              const modality = m.modality || "chat";
+              const modBadge =
+                modality === "image"
+                  ? "bg-purple-100 text-purple-700"
+                  : modality === "embedding"
+                  ? "bg-teal-100 text-teal-700"
+                  : "bg-blue-100 text-blue-700";
               return (
                 <button
                   key={m.id}
@@ -175,6 +221,7 @@ export default function ModelsPage() {
                   title={label}
                 >
                   {m.id}
+                  <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${modBadge}`}>{modality}</span>
                   <span className="ml-2 text-xs text-gray-400">{label}</span>
                 </button>
               );
@@ -221,9 +268,9 @@ export default function ModelsPage() {
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`rounded px-2 py-1 ${tab === t ? "bg-brand-600 text-white" : "hover:bg-gray-100"}`}
+              className={`rounded px-2 py-1 ${effectiveTab === t ? "bg-brand-600 text-white" : "hover:bg-gray-100"}`}
             >
-              {t === "chat" ? "chat" : t === "chat-stream" ? "chat (stream)" : "embeddings"}
+              {t === "chat" ? "chat" : t === "chat-stream" ? "chat (stream)" : t === "image" ? "images" : "embeddings"}
             </button>
           ))}
           <span className="ml-4 text-gray-500">Lang:</span>

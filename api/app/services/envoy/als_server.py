@@ -306,6 +306,11 @@ async def _ingest_entry(entry) -> None:
     try:
         async with AsyncSessionLocal() as db:
             m = await db.get(Model, mid) if mid is not None else None
+            # Image models are billed+logged synchronously by the FastAPI
+            # translator (hold/reconcile). Skip here to avoid double billing
+            # and a duplicate UsageLog row.
+            if m is not None and m.kind == "image":
+                return
             relay_cost = calc_cost_cents(m, prompt_tokens, completion_tokens) if m else 0
             cls_m = await db.get(Model, cls_mid) if cls_mid is not None else None
             cls_cost = (

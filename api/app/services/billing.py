@@ -17,6 +17,142 @@ def calc_cost_cents(model: Model, prompt_tokens: int, completion_tokens: int) ->
     return ceil(micro / 10_000_000)
 
 
+def _match_image_tier_micro(cfg: dict, size: str, quality: str) -> int:
+    """Per-image unit price (micro-cents) for a (size, quality). When no tier
+    matches, over-estimate with the most expensive tier so the pre-deduction
+    never under-charges; reconcile then uses the same value (same size) so the
+    only adjustment is for fewer images returned."""
+    tiers = cfg.get("tiers") or []
+    for t in tiers:
+        if str(t.get("size")) == size:
+            tq = t.get("quality")
+            if tq is None or str(tq) == quality:
+                return int(t.get("price_micro", 0))
+    if tiers:
+        return max(int(t.get("price_micro", 0)) for t in tiers)
+    return int(cfg.get("default_price_micro", 0))
+
+
+def quote_image_cost_cents(
+    model: Model,
+    *,
+    size: str,
+    quality: str,
+    n: int,
+    prompt_text: str = "",
+) -> tuple[int, dict]:
+    """Quote cost (integer cents, ceil) to generate `n` images for `model`.
+
+    Deterministic from request params, so the same function serves both the
+    pre-deduction estimate (n = requested) and the post-hoc reconcile
+    (n = images actually returned). Returns (cost_cents, meta).
+    """
+    cfg = (model.pricing_jsonb or {}) if model else {}
+    mode = cfg.get("mode") or "per_image"
+    n = max(0, int(n))
+    if mode == "token":
+        out_map = cfg.get("output_tokens") or {}
+        out_per = int(out_map.get(f"{size}|{quality}", cfg.get("default_out_tokens", 0)))
+        prompt_tokens = max(1, len(prompt_text) // 4) if prompt_text else 0
+        micro = prompt_tokens * (model.prompt_rate or 0) + out_per * n * (model.completion_rate or 0)
+        meta = {
+            "mode": "token", "size": size, "quality": quality,
+            "out_tokens_each": out_per, "prompt_tokens_est": prompt_tokens,
+        }
+        # token rates are micro-cents per 1K tokens -> /1000 /10000
+        return ceil(micro / 10_000_000), meta
+    else:
+        unit = _match_image_tier_micro(cfg, size, quality)
+        micro = unit * n
+        meta = {"mode": "per_image", "size": size, "quality": quality, "unit_micro": unit}
+        # price_micro is micro-cents per image -> /10000
+        return ceil(micro / 10_000), meta
+
+
+async def available_cents(db: AsyncSession, user: User) -> int:
+    """Total spendable right now: active subscription quota + wallet balance.
+    Used to gate expensive (image) requests before placing a hold so the
+    pre-deduction can never drive a balance negative."""
+    subs = await active_subscriptions(db, user.id)
+    return sum(s.remaining_cents for s in subs) + max(0, user.balance_cents or 0)
+
+
+async def refund_to_sources(
+    db: AsyncSession,
+    user: User,
+    api_key: ApiKey | None,
+    breakdown: list[tuple[str, int, int]],
+    refund_cents: int,
+    *,
+    ref_id: str | None = None,
+    note: str | None = None,
+) -> int:
+    """Return up to `refund_cents` to the exact sources a prior charge_user()
+    drained, per its `breakdown`. Wallet is refunded first, then subscriptions
+    that are still active; an expired subscription's share is routed to the
+    wallet so the user never loses it. Writes one BalanceTx(refund) and
+    reverses the api-key usage counter. Returns the amount actually refunded."""
+    if refund_cents <= 0 or not breakdown:
+        return 0
+    remaining = refund_cents
+
+    wallet_refund = min(sum(amt for kind, _, amt in breakdown if kind == "wallet"), remaining)
+    sub_refunds: list[tuple[int, int]] = []
+    rem2 = remaining - wallet_refund
+    if rem2 > 0:
+        active = {s.id: s for s in await active_subscriptions(db, user.id, lock=True)}
+        for kind, sid, amt in breakdown:
+            if kind != "sub" or rem2 <= 0:
+                continue
+            give = min(amt, rem2)
+            if sid in active:
+                sub_refunds.append((sid, give))
+            else:
+                wallet_refund += give  # expired subscription → refund to wallet
+            rem2 -= give
+
+    notes: list[str] = []
+    wallet_after = user.balance_cents or 0
+    if wallet_refund > 0:
+        result = await db.execute(
+            update(User).where(User.id == user.id)
+            .values(balance_cents=User.balance_cents + wallet_refund)
+            .returning(User.balance_cents)
+        )
+        wallet_after = result.scalar_one()
+        user.balance_cents = wallet_after
+        notes.append(f"wallet:+{wallet_refund}")
+    for sid, give in sub_refunds:
+        await db.execute(
+            update(Subscription).where(Subscription.id == sid)
+            .values(remaining_cents=Subscription.remaining_cents + give)
+        )
+        notes.append(f"sub#{sid}:+{give}")
+
+    total_refunded = wallet_refund + sum(g for _, g in sub_refunds)
+    if api_key is not None and total_refunded > 0:
+        await db.execute(
+            update(ApiKey).where(ApiKey.id == api_key.id)
+            .values(used_cents=ApiKey.used_cents - total_refunded)
+        )
+        api_key.used_cents = max(0, (api_key.used_cents or 0) - total_refunded)
+
+    full_note = note or ""
+    if notes:
+        full_note = f"{full_note} [{';'.join(notes)}]".strip()
+    db.add(BalanceTx(
+        user_id=user.id,
+        type=BalanceTxType.refund,
+        amount_cents=total_refunded,
+        balance_after=wallet_after,
+        ref_id=ref_id,
+        note=full_note or None,
+    ))
+    db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
+    await db.flush()
+    return total_refunded
+
+
 def next_period_end(now: datetime) -> datetime:
     """First day of the next calendar month at 00:00 UTC."""
     now = now.astimezone(timezone.utc)

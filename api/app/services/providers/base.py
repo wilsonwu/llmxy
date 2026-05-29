@@ -32,3 +32,14 @@ class ProviderAdapter(Protocol):
         upstream_model: str,
         payload: dict,
     ) -> tuple[int, dict]: ...
+
+    async def images(
+        self,
+        channel: Channel,
+        upstream_model: str,
+        payload: dict,
+    ) -> tuple[int, dict]:
+        """Text-to-image. Returns (status_code, OpenAI-shape body).
+        Adapters that don't support image generation should return
+        (501, {"error": {...}}). Timeouts should surface as status 504."""
+        ...

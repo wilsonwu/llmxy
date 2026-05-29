@@ -30,6 +30,7 @@ async def list_models(
     return [
         {
             "id": r.user_facing_model,
+            "modality": r.modality or "chat",
             "strategy": r.strategy.value if hasattr(r.strategy, "value") else r.strategy,
             "target_count": len(r.targets_jsonb or []),
         }

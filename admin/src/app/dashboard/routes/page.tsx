@@ -24,6 +24,9 @@ type R = {
   smart_score_threshold?: number;
   scope: "public" | "private";
   enabled: boolean;
+  // Forwarding modality this route serves. Persisted; each modality is
+  // independent and only the matching endpoint resolves it.
+  modality: "chat" | "embedding" | "image";
 };
 type M = { id: number; code: string; display_name: string; kind?: string };
 
@@ -38,6 +41,7 @@ const empty: R = {
   smart_score_threshold: 55,
   scope: "public",
   enabled: true,
+  modality: "chat",
 };
 
 const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
@@ -82,7 +86,7 @@ export default function RoutesPage() {
   const filtered = (data || []).filter(r => !q || r.user_facing_model.toLowerCase().includes(q.toLowerCase()));
 
   async function save(r: R) {
-    const payload = { ...r };
+    const payload: R = { ...r };
     if (r.strategy !== "smart") {
       payload.smart_rules_jsonb = [];
       payload.smart_default_label = null;
@@ -102,6 +106,11 @@ export default function RoutesPage() {
     mutate();
   }
   const modelLabel = (id: number) => models?.find((m) => m.id === id)?.code || `#${id}`;
+  const MODALITY_BADGE: Record<string, string> = {
+    chat: "bg-blue-100 text-blue-700",
+    embedding: "bg-teal-100 text-teal-700",
+    image: "bg-purple-100 text-purple-700",
+  };
 
   const renderTargetSummary = (r: R) =>
     r.targets_jsonb.map((t, i) => {
@@ -122,7 +131,7 @@ export default function RoutesPage() {
         <h1 className="text-2xl font-bold">Smart routing</h1>
         <div className="flex items-center gap-2">
           <input className="input" placeholder="Search public model name" value={q} onChange={(e) => setQ(e.target.value)} />
-          <button className="btn-primary" onClick={() => setEditing({ ...empty, targets_jsonb: [] })}>New</button>
+          <button className="btn-primary" onClick={() => setEditing({ ...empty, targets_jsonb: [], modality: "chat" })}>New</button>
         </div>
       </div>
 
@@ -144,7 +153,12 @@ export default function RoutesPage() {
             {filtered.map((r) => (
               <tr key={r.id}>
                 <td>{r.id}</td>
-                <td>{r.user_facing_model}</td>
+                <td>
+                  {r.user_facing_model}
+                  <span className={`ml-1 rounded px-1.5 py-0.5 text-xs ${MODALITY_BADGE[r.modality || "chat"]}`}>
+                    {r.modality || "chat"}
+                  </span>
+                </td>
                 <td>
                   {r.strategy}
                   {r.targets_jsonb.length <= 1 && (
@@ -165,6 +179,7 @@ export default function RoutesPage() {
                     smart_rules_jsonb: [...(r.smart_rules_jsonb || [])],
                     smart_exemplars_jsonb: [...(r.smart_exemplars_jsonb || [])],
                     smart_score_threshold: r.smart_score_threshold ?? 55,
+                    modality: r.modality || "chat",
                   })}>Edit</button>
                   <button className="btn-danger" onClick={() => del(r.id!)}>Delete</button>
                 </td>
@@ -229,7 +244,7 @@ export default function RoutesPage() {
               <button className="btn-outline text-xs" onClick={() => setEditing({
                 ...e,
                 targets_jsonb: [...e.targets_jsonb, {
-                  model_id: models?.[0]?.id || 0,
+                  model_id: (models?.find((m) => (m.kind || "chat") === (e.modality || "chat"))?.id) || 0,
                   weight: 1,
                   fallback_order: e.targets_jsonb.length,
                   label: "",
@@ -247,7 +262,7 @@ export default function RoutesPage() {
                   const v = [...e.targets_jsonb]; v[i] = { ...t, model_id: +ev.target.value };
                   setEditing({ ...e, targets_jsonb: v });
                 }}>
-                  {models?.filter((m) => (m.kind || "chat") === "chat").map((m) => (
+                  {models?.filter((m) => (m.kind || "chat") === (e.modality || "chat")).map((m) => (
                     <option key={m.id} value={m.id}>{m.code} — {m.display_name}</option>
                   ))}
                 </select>
@@ -299,6 +314,22 @@ export default function RoutesPage() {
                 <option value="public">public — listed in /v1/models and callable by users</option>
                 <option value="private">private — hidden &amp; not user-callable</option>
               </select>
+            </div>
+
+            <div>
+              <label className="label">Modality (forward type)</label>
+              <select className="input w-full" value={e.modality || "chat"}
+                onChange={(ev) => {
+                  const mod = ev.target.value as R["modality"];
+                  setEditing({ ...e, modality: mod, targets_jsonb: [] });
+                }}>
+                <option value="chat">chat — /v1/chat/completions</option>
+                <option value="embedding">embedding — /v1/embeddings</option>
+                <option value="image">image — /v1/images/generations</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Each route serves exactly one modality and is resolved only by its matching endpoint; all targets must be models of that kind. All strategies apply to every modality: weighted (load split), fallback (ordered failover on error), smart (pick by prompt — keyword/geo rules and the embedding classifier work everywhere; chat-oriented presets like code/math are noise for image/embedding prompts). Switching modality clears the current targets.
+              </p>
             </div>
 
             <div>

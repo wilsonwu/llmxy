@@ -20,12 +20,21 @@ from app.core.request_ctx import client_ip, request_id_var
 router = APIRouter(prefix="/v1", tags=["relay"])
 
 
-async def _load_route(db: AsyncSession, user_facing_model: str) -> tuple[RoutePolicy, dict[int, Model], dict[int, Channel]]:
+async def _load_route(
+    db: AsyncSession, user_facing_model: str, *, expected_modality: str | None = None
+) -> tuple[RoutePolicy, dict[int, Model], dict[int, Channel]]:
     policy = (
         await db.execute(select(RoutePolicy).where(RoutePolicy.user_facing_model == user_facing_model))
     ).scalar_one_or_none()
     if not policy or not policy.enabled or policy.scope == RouteScope.private:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"model {user_facing_model} not available")
+    # A route only serves its own modality — a chat name can't be called on the
+    # embeddings/images endpoint and vice versa.
+    if expected_modality is not None and (policy.modality or "chat") != expected_modality:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"model {user_facing_model} is not available on the {expected_modality} endpoint",
+        )
     target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
     if not target_ids:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "route has no targets")
@@ -89,7 +98,7 @@ async def chat_completions(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
 
     stream = bool(payload.get("stream"))
-    policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model)
+    policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model, expected_modality="chat")
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(
         policy, models_by_id, channels_by_id,
@@ -107,9 +116,9 @@ async def chat_completions(
         async def streamer() -> AsyncIterator[bytes]:
             last_err: str | None = None
             for m, c in candidates:
-                adapter = providers.get_adapter(c.provider_type)
+                adapter = providers.get_adapter(m.upstream_protocol or c.provider_type)
                 if not adapter:
-                    last_err = f"no adapter for {c.provider_type}"
+                    last_err = f"no adapter for {m.upstream_protocol or c.provider_type}"
                     continue
                 try:
                     result = await adapter.chat(c, m.upstream_model, payload, stream=True)
@@ -145,9 +154,9 @@ async def chat_completions(
 
     last_err = None
     for m, c in candidates:
-        adapter = providers.get_adapter(c.provider_type)
+        adapter = providers.get_adapter(m.upstream_protocol or c.provider_type)
         if not adapter:
-            last_err = f"no adapter for {c.provider_type}"; continue
+            last_err = f"no adapter for {m.upstream_protocol or c.provider_type}"; continue
         try:
             result = await adapter.chat(c, m.upstream_model, payload, stream=False)
         except Exception as e:

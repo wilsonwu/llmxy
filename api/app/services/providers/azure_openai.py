@@ -30,12 +30,13 @@ class AzureOpenAIAdapter:
             h["api-key"] = key
         return h
 
-    def _url(self, channel: Channel, deployment: str, path: str) -> str:
+    def _url(self, channel: Channel, deployment: str, path: str, api_version: str | None = None) -> str:
         base = channel.base_url.rstrip("/")
         # tolerate base already ending in /openai
         if not base.endswith("/openai"):
             base = base + "/openai"
-        return f"{base}/deployments/{deployment}{path}?api-version={settings.AZURE_OPENAI_API_VERSION}"
+        ver = api_version or settings.AZURE_OPENAI_API_VERSION
+        return f"{base}/deployments/{deployment}{path}?api-version={ver}"
 
     async def chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
         body = dict(payload)
@@ -80,3 +81,20 @@ class AzureOpenAIAdapter:
                 return r.status_code, r.json()
             except Exception:
                 return r.status_code, {"error": {"message": r.text}}
+
+    async def images(self, channel: Channel, upstream_model: str, payload: dict) -> tuple[int, dict]:
+        body = dict(payload); body.pop("model", None)  # deployment in URL decides
+        # gpt-image-1 / dall-e generations are only available on the image
+        # preview api-version; the chat GA version 404s here.
+        url = self._url(channel, upstream_model, "/images/generations", settings.AZURE_OPENAI_IMAGE_API_VERSION)
+        try:
+            async with httpx.AsyncClient(timeout=settings.IMAGE_RELAY_TIMEOUT) as cli:
+                r = await cli.post(url, json=body, headers=self._headers(channel))
+                try:
+                    return r.status_code, r.json()
+                except Exception:
+                    return r.status_code, {"error": {"message": r.text}}
+        except httpx.TimeoutException:
+            return 504, {"error": {"message": "upstream image generation timed out", "type": "timeout"}}
+        except Exception as e:
+            return 502, {"error": {"message": str(e), "type": "upstream_error"}}

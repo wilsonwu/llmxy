@@ -38,8 +38,18 @@ class Settings(BaseSettings):
     # Upstream HTTP timeout (seconds) for non-stream requests
     UPSTREAM_TIMEOUT: int = 120
 
+    # Image generation can take much longer than chat/embeddings. Dedicated
+    # timeout for /v1/images/generations upstream calls. The image relay
+    # refunds the full pre-deduction on timeout, so this should comfortably
+    # exceed provider p99 image latency.
+    IMAGE_RELAY_TIMEOUT: int = 120
+
     # Azure OpenAI default api-version (channel-level override planned via extra config)
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
+    # Image generation (gpt-image-1 / dall-e) on Azure is only exposed on a
+    # newer preview api-version than the chat GA one — the GA version returns
+    # 404 "Resource not found" for /images/generations on gpt-image-1 deployments.
+    AZURE_OPENAI_IMAGE_API_VERSION: str = "2025-04-01-preview"
 
     # Encryption key for upstream secrets (channels.api_key_enc).
     # Any string accepted — SHA-256 derives a Fernet key. Empty = dev plaintext mode.
