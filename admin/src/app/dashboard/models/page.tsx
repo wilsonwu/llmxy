@@ -101,11 +101,43 @@ function upstreamSample(protocol: string, kind: string, m: string): string | nul
   return null;
 }
 
+// Micro-cents → human dollar string. 1 micro-cent = 1/10000 cent.
+function microToUsd(micro: number): string {
+  return `$${(micro / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
+}
+
+// Kind-aware short pricing summary for the model list.
+function pricingSummary(m: M) {
+  if (m.kind === "image") {
+    const p = m.pricing_jsonb || {};
+    const tiers = p.tiers || [];
+    const def = p.default_price_micro ?? 0;
+    if (!tiers.length) return <span className="text-xs">default {microToUsd(def)}/img</span>;
+    const prices = tiers.map((t) => t.price_micro);
+    const lo = Math.min(...prices), hi = Math.max(...prices);
+    return (
+      <span className="text-xs">
+        {tiers.length} tier{tiers.length > 1 ? "s" : ""}{" "}
+        {lo === hi ? microToUsd(lo) : `${microToUsd(lo)}–${microToUsd(hi)}`}/img
+        <span className="text-gray-400"> · def {microToUsd(def)}</span>
+      </span>
+    );
+  }
+  // chat / embedding: per-1K-token rates (completion is irrelevant for embedding)
+  return (
+    <span className="text-xs">
+      p {m.prompt_rate}
+      {m.kind !== "embedding" && <> · c {m.completion_rate}</>}
+    </span>
+  );
+}
+
 export default function ModelsPage() {
   const { data, mutate } = useSWR<M[]>("/api/v1/admin/models", fetcher);
   const { data: channels } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
   const [editing, setEditing] = useState<M | null>(null);
   const [q, setQ] = useState("");
+  const [showSample, setShowSample] = useState(false);
   const filtered = (data || []).filter(m =>
     !q || m.code.toLowerCase().includes(q.toLowerCase()) || m.upstream_model.toLowerCase().includes(q.toLowerCase()) || m.display_name.toLowerCase().includes(q.toLowerCase())
   );
@@ -130,17 +162,18 @@ export default function ModelsPage() {
           <button className="btn-primary" onClick={() => setEditing({ ...empty, channel_id: channels?.[0]?.id || 0 })}>New</button>
         </div>
       </div>
-      <p className="text-xs text-gray-500">rate unit: micro-cents (1/10000 cent) / 1K tokens. e.g. 1500 ≈ $0.00015/1K.</p>
+      <p className="text-xs text-gray-500">token rate unit: micro-cents (1/10000 cent) / 1K tokens (chat/embedding). image priced per generated image. e.g. 1500 ≈ $0.0015/1K · 400000 = $0.40/img.</p>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>Kind</th><th>prompt_rate</th><th>completion_rate</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>Kind</th><th>Protocol</th><th>Pricing</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
             {filtered.map((m) => (
               <tr key={m.id}>
                 <td>{m.id}</td><td>{m.code}</td><td>{m.display_name}</td>
                 <td>{chName(m.channel_id)}</td><td>{m.upstream_model}</td>
                 <td>{m.kind || "chat"}</td>
-                <td>{m.prompt_rate}</td><td>{m.completion_rate}</td>
+                <td className="text-xs text-gray-500">{m.upstream_protocol || "auto"}</td>
+                <td>{pricingSummary(m)}</td>
                 <td>{m.enabled ? "✓" : "—"}</td>
                 <td className="space-x-2">
                   <button className="btn-outline" onClick={() => setEditing({ ...m })}>Edit</button>
@@ -152,66 +185,76 @@ export default function ModelsPage() {
         </table>
       </div>
       {editing && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className="card w-[500px] space-y-3">
+        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30 p-4">
+          <div className="card w-[560px] max-h-[88vh] overflow-y-auto space-y-3">
             <h2 className="text-lg font-semibold">{editing.id ? "Edit" : "New"} model</h2>
-            <div><label className="label">code (public-facing name)</label>
-              <input className="input w-full" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value })} /></div>
-            <div><label className="label">display_name</label>
-              <input className="input w-full" value={editing.display_name} onChange={(e) => setEditing({ ...editing, display_name: e.target.value })} /></div>
-            <div><label className="label">channel</label>
-              <select className="input w-full" value={editing.channel_id} onChange={(e) => setEditing({ ...editing, channel_id: +e.target.value })}>
-                {channels?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select></div>
-            <div><label className="label">upstream_model</label>
-              <input className="input w-full" value={editing.upstream_model} onChange={(e) => setEditing({ ...editing, upstream_model: e.target.value })} /></div>
-            <div><label className="label">kind</label>
-              <select className="input w-full" value={editing.kind} onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>
-                <option value="chat">chat (chat/completions)</option>
-                <option value="embedding">embedding (embeddings)</option>
-                <option value="image">image (text-to-image / images/generations)</option>
-              </select>
-              <p className="text-xs text-gray-500 mt-1">Selects which OpenAI-compatible endpoint serves this model. Image models bill per generated image via the pricing table below.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">code (public-facing name)</label>
+                <input className="input w-full" value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value })} /></div>
+              <div><label className="label">display_name</label>
+                <input className="input w-full" value={editing.display_name} onChange={(e) => setEditing({ ...editing, display_name: e.target.value })} /></div>
+              <div><label className="label">channel</label>
+                <select className="input w-full" value={editing.channel_id} onChange={(e) => setEditing({ ...editing, channel_id: +e.target.value })}>
+                  {channels?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select></div>
+              <div><label className="label">upstream_model</label>
+                <input className="input w-full" value={editing.upstream_model} onChange={(e) => setEditing({ ...editing, upstream_model: e.target.value })} /></div>
+              <div><label className="label">kind</label>
+                <select className="input w-full" value={editing.kind} onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>
+                  <option value="chat">chat (chat/completions)</option>
+                  <option value="embedding">embedding (embeddings)</option>
+                  <option value="image">image (images/generations)</option>
+                </select></div>
+              <div><label className="label">upstream protocol</label>
+                <select className="input w-full" value={editing.upstream_protocol || ""} onChange={(e) => setEditing({ ...editing, upstream_protocol: e.target.value || null })}>
+                  <option value="">(auto — channel default)</option>
+                  {(editing.kind === "image" ? IMAGE_PROTOCOLS : editing.kind === "embedding" ? EMBEDDING_PROTOCOLS : CHAT_PROTOCOLS).map((p) => <option key={p} value={p}>{p}</option>)}
+                </select></div>
             </div>
-            <div><label className="label">upstream protocol (wire format)</label>
-              <select className="input w-full" value={editing.upstream_protocol || ""} onChange={(e) => setEditing({ ...editing, upstream_protocol: e.target.value || null })}>
-                <option value="">(auto — use channel provider type)</option>
-                {(editing.kind === "image" ? IMAGE_PROTOCOLS : editing.kind === "embedding" ? EMBEDDING_PROTOCOLS : CHAT_PROTOCOLS).map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">Selects the upstream translation adapter. One channel can host models of different protocols (e.g. Azure AI Foundry). Leave on auto to fall back to the channel&apos;s provider type.</p>
-              {editing.upstream_protocol ? (() => {
-                const sample = upstreamSample(editing.upstream_protocol, editing.kind, editing.upstream_model);
-                return (
-                  <div className="mt-2">
-                    <div className="text-xs text-gray-500 mb-1">Upstream request preview — what LLMxY sends to the provider after translating the incoming OpenAI-format call:</div>
-                    {sample ? (
+            <p className="text-xs text-gray-500">Protocol selects the upstream translation adapter; one channel can host mixed protocols (e.g. Azure AI Foundry). Leave on auto to use the channel&apos;s provider type.</p>
+
+            {/* Collapsible upstream request preview keeps the modal short by default */}
+            <div className="rounded border border-gray-200">
+              <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                onClick={() => setShowSample((s) => !s)}>
+                <span>Upstream request preview {editing.upstream_protocol ? `(${editing.upstream_protocol})` : "(select a protocol)"}</span>
+                <span>{showSample ? "▾" : "▸"}</span>
+              </button>
+              {showSample && (
+                <div className="px-3 pb-3">
+                  {editing.upstream_protocol ? (() => {
+                    const sample = upstreamSample(editing.upstream_protocol, editing.kind, editing.upstream_model);
+                    return sample ? (
                       <pre className="text-[11px] leading-relaxed bg-gray-900 text-gray-100 rounded p-3 overflow-x-auto whitespace-pre-wrap break-all">{sample}</pre>
                     ) : (
                       <p className="text-xs text-amber-600">⚠ {editing.upstream_protocol} does not support {editing.kind} (no adapter / not yet implemented).</p>
-                    )}
-                  </div>
-                );
-              })() : (
-                <p className="text-xs text-gray-400 mt-1">Pick a protocol to preview the exact upstream request format.</p>
+                    );
+                  })() : (
+                    <p className="text-xs text-gray-400">Pick a protocol to preview the exact upstream request format LLMxY sends after translating the incoming OpenAI-format call.</p>
+                  )}
+                </div>
               )}
             </div>
+
             {editing.kind === "image" ? (
-              <ImagePricingEditor pricing={editing.pricing_jsonb || {}} onChange={(p) => setEditing({ ...editing, pricing_jsonb: p })} />
+              <>
+                <ImagePricingEditor pricing={editing.pricing_jsonb || {}} onChange={(p) => setEditing({ ...editing, pricing_jsonb: p })} />
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
+                </label>
+              </>
             ) : (
-              <div className="flex gap-3">
+              <div className="flex gap-3 items-end">
                 <div className="flex-1"><label className="label">prompt_rate</label>
                   <input type="number" className="input w-full" value={editing.prompt_rate} onChange={(e) => setEditing({ ...editing, prompt_rate: +e.target.value })} /></div>
-                <div className="flex-1"><label className="label">completion_rate</label>
-                  <input type="number" className="input w-full" value={editing.completion_rate} onChange={(e) => setEditing({ ...editing, completion_rate: +e.target.value })} /></div>
-                <label className="flex items-center gap-2 pt-5">
+                {editing.kind !== "embedding" && (
+                  <div className="flex-1"><label className="label">completion_rate</label>
+                    <input type="number" className="input w-full" value={editing.completion_rate} onChange={(e) => setEditing({ ...editing, completion_rate: +e.target.value })} /></div>
+                )}
+                <label className="flex items-center gap-2 pb-2">
                   <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
                 </label>
               </div>
-            )}
-            {editing.kind === "image" && (
-              <label className="flex items-center gap-2">
-                <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled
-              </label>
             )}
             <div className="flex justify-end gap-2">
               <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
