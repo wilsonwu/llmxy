@@ -969,7 +969,7 @@ export default function EnvoyPage() {
                     </li>
                   </ol>
                   <div className="mt-2 text-xs">
-                    node_id: <code>{drawerData.node_id}</code> · listen :{drawer.inst.listen_port} · admin :{drawer.inst.admin_port || 9901}
+                    node_id: <code>{drawerData.node_id}</code> · listen :{drawer.inst.listen_port} · admin :{drawer.inst.admin_port || 9001}
                   </div>
                 </div>
                 <div className="flex gap-1 border-b text-sm">

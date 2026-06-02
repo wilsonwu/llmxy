@@ -33,9 +33,9 @@ services:
       - ./bootstrap.template.yaml:/etc/envoy-template/bootstrap.template.yaml:ro
     ports:
       - "9000:9000"   # client traffic (matches listen_port from the control plane)
-      - "9901:9901"   # envoy admin (do NOT expose publicly in prod)
+      - "9001:9001"   # envoy admin (do NOT expose publicly in prod)
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9901/ready"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9001/ready"]
       interval: 10s
       timeout: 3s
       retries: 5

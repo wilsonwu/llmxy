@@ -17,10 +17,10 @@ client certificates.
    `x-llmxy-token`; `CONTROL_PLANE_PUBLIC_HOST` is the first address a
    remote envoy will try.
 2. **Create a remote instance** in the admin UI (Envoy → New instance →
-   mode = remote, listen_port = the port your envoy will expose,
-   admin_url = how the control plane will reach this envoy's admin API).
-   Note the `node_id` shown on the resulting row — you'll paste it into
-   the deployment env vars below.
+   mode = remote). For Kubernetes, the generated Service exposes NodePort
+   `30000` for client traffic and `30001` for admin. For Docker host-network
+   mode, Envoy binds `9000` and `9001` directly. The UI derives the `node_id`
+   from the instance name and bakes it into the generated artifacts.
 
 No need to download a bootstrap.yaml — both deployment options here ship a
 template (`bootstrap.template.yaml`) and substitute the per-instance values
@@ -54,18 +54,20 @@ kubectl apply -f kubernetes.yaml
 kubectl rollout status deploy/llmxy-envoy
 ```
 
-`Service` defaults to `LoadBalancer`; switch to `ClusterIP` / `NodePort` per
-your environment. Scale by editing `Deployment.spec.replicas` — every replica
-shares the same bootstrap and connects to the same control plane node row.
+`Service` defaults to `NodePort` with `30000` (listen) and `30001` (admin),
+matching the admin UI generated manifest. Scale by editing
+`Deployment.spec.replicas` — every replica shares the same bootstrap and
+connects to the same control plane node row.
 
 ## Verifying End-to-End
 
-1. Local: `curl http://<envoy>:9901/ready` returns `LIVE`.
+1. Local: `curl http://<envoy>:9001/ready` returns `LIVE` for Docker, or
+   `curl http://<node-ip>:30001/ready` for the default Kubernetes NodePort.
 2. Control plane: instance shows green, last seen seconds ago, ADS connected.
 3. Send a request: `curl http://<envoy>:9000/v1/chat/completions -H ...` —
    the relay billing log gets a fresh row.
-4. Hot reload: change a channel in the admin UI and click Push — within a
-   second envoy logs `cds: add/update cluster ...` with no restart.
+4. Hot reload: change a channel in the admin UI and click Sync — within a
+   second Envoy receives a fresh xDS push with no restart.
 
 ## Rotating the Token
 

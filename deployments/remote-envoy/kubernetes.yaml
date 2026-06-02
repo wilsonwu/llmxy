@@ -28,7 +28,7 @@ data:
       cluster: llmxy-remote
     admin:
       address:
-        socket_address: { address: 0.0.0.0, port_value: 9901 }
+        socket_address: { address: 0.0.0.0, port_value: 9001 }
     dynamic_resources:
       ads_config:
         api_type: GRPC
@@ -126,7 +126,7 @@ spec:
             - name: client
               containerPort: 9000
             - name: admin
-              containerPort: 9901
+              containerPort: 9001
           readinessProbe:
             httpGet: { path: /ready, port: admin }
             initialDelaySeconds: 5
@@ -154,16 +154,15 @@ metadata:
   labels:
     app: llmxy-envoy
 spec:
-  # Switch to ClusterIP / NodePort if your environment doesn't provision LBs.
-  type: LoadBalancer
+  type: NodePort
   selector:
     app: llmxy-envoy
   ports:
-    - name: client
-      port: 80
+    - name: listen
+      port: 9000
       targetPort: client
-    # Optional: expose admin only via in-cluster Service for the control plane
-    # to reach /ready and /stats. Comment out if not required.
+      nodePort: 30000
     - name: admin
-      port: 9901
+      port: 9001
       targetPort: admin
+      nodePort: 30001
