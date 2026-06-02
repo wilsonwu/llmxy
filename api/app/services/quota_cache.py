@@ -1,4 +1,4 @@
-"""Redis-backed quota state for the ext_authz hot path.
+"""Redis-backed quota state for the ext_proc hot path.
 
 The hot path (relay.authz) needs to answer "does this user/key have quota
 left?" in <1ms. Going to PG for the answer adds 3 SELECTs (api_key,

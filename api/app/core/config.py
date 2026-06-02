@@ -64,11 +64,15 @@ class Settings(BaseSettings):
     # Root dir for per-instance rendered configs: {ENVOY_CONFIG_ROOT}/{instance_name}/
     ENVOY_CONFIG_ROOT: str = "./var/envoy"
     ENVOY_LOG_ROOT: str = "./var/envoy-logs"
-    # Internal API base envoy ext_authz / translator calls; must be reachable from envoy
+    # Internal API base for envoy translator calls; must be reachable from envoy
     INTERNAL_API_HOST: str = "127.0.0.1"
     INTERNAL_API_PORT: int = 8000
     # gRPC ALS server (envoy AccessLogService client)
     ALS_GRPC_PORT: int = 8002
+    # gRPC External Processing server. Envoy uses this for relay auth/routing;
+    # it authenticates, resolves the route target, and mutates request headers
+    # before routing to the internal translator.
+    EXT_PROC_GRPC_PORT: int = 8004
     # ===== Remote envoy (gRPC ADS, plaintext + shared token) =====
     # xDS ADS gRPC server. Public-reachable for remote envoy nodes.
     XDS_GRPC_PORT: int = 8003
@@ -83,12 +87,12 @@ class Settings(BaseSettings):
     # Override to a mirror (e.g. docker.m.daocloud.io/envoyproxy/envoy:v1.37.2)
     # when the operator's environment can't reach docker.io directly.
     ENVOY_IMAGE: str = "envoyproxy/envoy:v1.37.2"
-    # ext_authz max body buffer (bytes). Must be >= largest expected chat
+    # ext_proc max body buffer (bytes). Must be >= largest expected chat
     # completion request body — anything larger gets rejected upstream.
-    ENVOY_EXT_AUTHZ_MAX_BYTES: int = 1024 * 1024  # 1 MiB
-    # ext_authz call timeout (seconds). Should comfortably exceed p99 of the
-    # internal /internal/relay/authz/* handler (DB lookup + balance check).
-    ENVOY_EXT_AUTHZ_TIMEOUT: str = "5s"
+    ENVOY_EXT_PROC_MAX_BYTES: int = 1024 * 1024  # 1 MiB
+    # ext_proc call timeout. Should comfortably exceed p99 of route selection
+    # (cache lookup + DB route/target lookup + optional smart classifier).
+    ENVOY_EXT_PROC_TIMEOUT: str = "5s"
     # Background health monitor: probe /ready on every active instance and
     # update last_health_at. After this many consecutive failures, flip
     # status=error and write last_error. 0 disables the monitor.

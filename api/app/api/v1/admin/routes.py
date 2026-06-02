@@ -13,6 +13,7 @@ from app.services.envoy.config import regenerate_all_running
 router = APIRouter(prefix="/routes", tags=["admin-routes"])
 
 VALID_MODALITIES = {"chat", "embedding", "image"}
+VALID_EXPOSED_PROTOCOLS = {"openai", "anthropic"}
 
 
 @router.get("", response_model=list[RoutePolicyOut])
@@ -25,6 +26,14 @@ async def _validate_modality(db: AsyncSession, req: RoutePolicyIn) -> None:
     that kind so the route can only be resolved by the matching endpoint."""
     if req.modality not in VALID_MODALITIES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid modality {req.modality!r}")
+    protocols = [p.lower() for p in (req.exposed_protocols or ["openai"])]
+    bad = [p for p in protocols if p not in VALID_EXPOSED_PROTOCOLS]
+    if bad:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid exposed_protocols: {', '.join(bad)}")
+    if not protocols:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "exposed_protocols must not be empty")
+    if req.modality != "chat" and any(p != "openai" for p in protocols):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "only chat routes can expose non-openai protocols")
     target_ids = [t.model_id for t in req.targets_jsonb]
     if not target_ids:
         return
@@ -45,6 +54,7 @@ def _to_orm(req: RoutePolicyIn) -> dict:
     return {
         "user_facing_model": req.user_facing_model,
         "modality": req.modality,
+        "exposed_protocols": list(dict.fromkeys(p.lower() for p in (req.exposed_protocols or ["openai"]))),
         "strategy": RouteStrategy(req.strategy),
         "targets_jsonb": [t.model_dump() for t in req.targets_jsonb],
         "smart_rules_jsonb": [r.model_dump(exclude_none=True) for r in req.smart_rules_jsonb],

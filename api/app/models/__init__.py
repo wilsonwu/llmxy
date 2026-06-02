@@ -239,11 +239,14 @@ class RoutePolicy(Base):
     __tablename__ = "route_policies"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_facing_model: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    # Forwarding modality this route serves: "chat" | "embedding" | "image".
-    # Each modality is independent; all targets must be models of this kind,
-    # and only the matching endpoint (/v1/chat/completions, /v1/embeddings,
-    # /v1/images/generations) will resolve it.
+    # Client-facing modality this route serves: "chat" | "embedding" | "image".
+    # Each modality is independent; all targets must be models of this kind.
     modality: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat", nullable=False)
+    # Public protocols this route exposes to clients. Upstream protocols are
+    # per-target Model.upstream_protocol; this list controls request/response
+    # wire shape at the gateway boundary (e.g. OpenAI-compatible or Anthropic
+    # Messages). JSON keeps dev-time schema iteration cheap.
+    exposed_protocols: Mapped[list] = mapped_column(JSON, default=lambda: ["openai"], server_default='["openai"]', nullable=False)
     strategy: Mapped[RouteStrategy] = mapped_column(SAEnum(RouteStrategy), default=RouteStrategy.weighted)
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # targets: [{model_id:int, weight:int, fallback_order:int, label?:str}]

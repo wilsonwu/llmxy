@@ -124,7 +124,7 @@ def render_bootstrap(inst: EnvoyInstance) -> dict[str, Any]:
         "static_resources": {
             # xds + als are statically wired here so envoy can bring up the
             # control-plane channels before LDS/CDS arrive. The application
-            # clusters (translator, ext_authz, per-channel) come over CDS.
+            # clusters (translator, ext_proc, per-channel) come over CDS.
             "clusters": [
                 _grpc_cluster("xds_cluster", host, settings.XDS_GRPC_PORT),
                 _grpc_cluster("als_cluster", host, settings.ALS_GRPC_PORT),

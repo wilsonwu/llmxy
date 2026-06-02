@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_admin
 from app.db.session import get_db
-from app.models import Model, User
+from app.models import Channel, Model, User
 from app.schemas import ModelIn, ModelOut
 from app.services.envoy.config import regenerate_all_running
 from app.services.providers import SUPPORTED, SUPPORTED_IMAGE_PROTOCOLS
@@ -18,13 +18,14 @@ router = APIRouter(prefix="/models", tags=["admin-models"])
 _EMBEDDING_PROTOCOLS = [p for p in SUPPORTED if p != "anthropic"]
 
 
-def _validate_protocol(req: ModelIn) -> None:
+async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
     """Validate the optional per-model upstream protocol override against the
-    protocols supported for the model's modality. Empty = fall back to the
-    channel's provider_type at relay time (back-compat)."""
-    if not req.upstream_protocol:
-        return
-    proto = req.upstream_protocol.lower()
+    protocols supported for the model's modality. Empty = inherit the channel's
+    provider_type; that inherited effective protocol is validated too."""
+    channel = await db.get(Channel, req.channel_id)
+    if not channel:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"channel {req.channel_id} not found")
+    proto = (req.upstream_protocol or channel.provider_type or "").lower()
     if req.kind == "image":
         allowed = SUPPORTED_IMAGE_PROTOCOLS
     elif req.kind == "embedding":
@@ -32,9 +33,10 @@ def _validate_protocol(req: ModelIn) -> None:
     else:
         allowed = SUPPORTED
     if proto not in allowed:
+        source = "model override" if req.upstream_protocol else "inherited channel protocol"
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"unsupported upstream_protocol {req.upstream_protocol!r} for kind {req.kind!r}; "
+            f"unsupported upstream protocol {proto!r} ({source}) for kind {req.kind!r}; "
             f"supported: {', '.join(allowed)}",
         )
 
@@ -46,7 +48,7 @@ async def list_models(_: User = Depends(require_admin), db: AsyncSession = Depen
 
 @router.post("", response_model=ModelOut)
 async def create_model(req: ModelIn, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    _validate_protocol(req)
+    await _validate_protocol(db, req)
     row = Model(**req.model_dump())
     db.add(row)
     await db.commit()
@@ -57,7 +59,7 @@ async def create_model(req: ModelIn, _: User = Depends(require_admin), db: Async
 
 @router.put("/{mid}", response_model=ModelOut)
 async def update_model(mid: int, req: ModelIn, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    _validate_protocol(req)
+    await _validate_protocol(db, req)
     row = await db.get(Model, mid)
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND)

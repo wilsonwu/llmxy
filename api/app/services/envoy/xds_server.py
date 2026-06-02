@@ -38,8 +38,7 @@ from envoy.extensions.transport_sockets.tls.v3 import tls_pb2  # noqa: F401 (reg
 from envoy.extensions.filters.network.http_connection_manager.v3 import (  # noqa: F401
     http_connection_manager_pb2,
 )
-from envoy.extensions.filters.http.ext_authz.v3 import ext_authz_pb2  # noqa: F401
-from envoy.extensions.filters.http.lua.v3 import lua_pb2  # noqa: F401
+from envoy.extensions.filters.http.ext_proc.v3 import ext_proc_pb2  # noqa: F401
 from envoy.extensions.filters.http.router.v3 import router_pb2  # noqa: F401
 from envoy.extensions.access_loggers.grpc.v3 import als_pb2  # noqa: F401
 from envoy.extensions.upstreams.http.v3 import http_protocol_options_pb2  # noqa: F401
@@ -130,13 +129,18 @@ async def _pubsub_listener() -> None:
 # --- resource rendering -----------------------------------------------------
 
 def _target_addr(inst: EnvoyInstance) -> tuple[str, int]:
-    """Where this envoy should dial back for ext_authz / translator. Local
+    """Where this envoy should dial back for HTTP translator calls. Local
     envoys live on the same host as the api process, so loopback is both
     correct and avoids depending on CONTROL_PLANE_PUBLIC_HOST being set in
     single-host dev. Remote uses the operator-supplied public host."""
     if inst.mode == EnvoyMode.local:
         return ("127.0.0.1", settings.API_PORT)
     return (settings.CONTROL_PLANE_PUBLIC_HOST or "127.0.0.1", settings.API_PORT)
+
+
+def _ext_proc_addr(inst: EnvoyInstance) -> tuple[str, int]:
+    host, _ = _target_addr(inst)
+    return host, settings.EXT_PROC_GRPC_PORT
 
 
 def _listen_bind_port(inst: EnvoyInstance) -> int:
@@ -152,9 +156,8 @@ def _listen_bind_port(inst: EnvoyInstance) -> int:
 
 def _render_lds(inst: EnvoyInstance) -> dict[str, Any]:
     """LDS for any instance. Rewrites the listener bind port (mode-dependent)
-    and the ext_authz http_service endpoint (so envoy dials the right control
-    plane address). RDS source is forced to ADS."""
-    target_host, target_port = _target_addr(inst)
+    and forces RDS to ADS. ext_proc endpoint is carried by CDS cluster
+    `ext_proc`, so there is no LDS HTTP service rewrite."""
     bind_port = _listen_bind_port(inst)
     lds = envoy_config.render_lds(inst)
     for res in lds.get("resources", []):
@@ -169,20 +172,15 @@ def _render_lds(inst: EnvoyInstance) -> dict[str, Any]:
                         "ads": {},
                         "resource_api_version": "V3",
                     }
-                for hf in tc.get("http_filters", []) or []:
-                    htc = hf.get("typed_config", {})
-                    http_svc = htc.get("http_service")
-                    if http_svc:
-                        http_svc["server_uri"]["uri"] = f"http://{target_host}:{target_port}"
-                        http_svc["server_uri"]["cluster"] = "ext_authz"
     return lds
 
 
 def _render_cds(inst: EnvoyInstance, channels: list[Channel]) -> dict[str, Any]:
     """CDS for any instance. Filters out the static `als` cluster (now lives
     in bootstrap.static_resources as `als_cluster`) and rewrites the
-    translator / ext_authz endpoints to the right control plane address."""
+    translator / ext_proc endpoints to the right control plane address."""
     target_host, target_port = _target_addr(inst)
+    ext_proc_host, ext_proc_port = _ext_proc_addr(inst)
     cds = envoy_config.render_cds(channels)
     kept: list[dict[str, Any]] = []
     for res in cds.get("resources", []):
@@ -191,11 +189,18 @@ def _render_cds(inst: EnvoyInstance, channels: list[Channel]) -> dict[str, Any]:
             # ALS cluster is defined statically in bootstrap (under the name
             # "als_cluster") so envoy can dial ALS before CDS arrives.
             continue
-        if name in ("translator", "ext_authz"):
+        if name == "translator":
             try:
                 ep = res["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
                 ep["address"] = target_host
                 ep["port_value"] = target_port
+            except Exception:
+                pass
+        elif name == "ext_proc":
+            try:
+                ep = res["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"]
+                ep["address"] = ext_proc_host
+                ep["port_value"] = ext_proc_port
             except Exception:
                 pass
         kept.append(res)

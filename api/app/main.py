@@ -8,9 +8,9 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.internal import relay as internal_relay
 from app.api.internal import translate as internal_translate
 from app.api.relay import chat as relay_chat
+from app.api.relay import anthropic as relay_anthropic
 from app.api.relay import embeddings as relay_embeddings
 from app.api.relay import images as relay_images
 from app.api.relay import models_list as relay_models
@@ -172,13 +172,13 @@ app.include_router(admin_envoy.router, prefix=ADMIN)
 
 # OpenAI-compatible relay (root /v1/*)
 app.include_router(relay_chat.router)
+app.include_router(relay_anthropic.router)
 app.include_router(relay_embeddings.router)
 app.include_router(relay_images.router)
 app.include_router(relay_models.router)
 
-# internal (envoy ext_authz / translator); bound to 127.0.0.1 in prod via
-# settings.INTERNAL_API_HOST when run as a dedicated worker.
-app.include_router(internal_relay.router)
+# internal translator; bound to 127.0.0.1 in prod via settings.INTERNAL_API_HOST
+# when run as a dedicated worker. Envoy reaches it only after ext_proc auth.
 app.include_router(internal_translate.router)
 
 
@@ -214,6 +214,14 @@ async def startup() -> None:
         await als_server.start()
     except Exception as e:
         logging.warning("ALS server failed to start (continuing): %s", e)
+
+    # Envoy external processing server for relay authn/authz and route
+    # resolution.
+    try:
+        from app.services.envoy import ext_proc_server
+        await ext_proc_server.start()
+    except Exception as e:
+        logging.warning("ext_proc server failed to start (continuing): %s", e)
 
     # xDS ADS server for remote envoys (plaintext + shared token auth).
     try:

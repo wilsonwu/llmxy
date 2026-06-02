@@ -91,7 +91,7 @@ async def enforce_key_state(db: AsyncSession, api_key: ApiKey) -> None:
 
 
 async def enforce_key_state_cached(snap):
-    """Snapshot-based variant used on the ext_authz hot path.
+    """Snapshot-based variant used on the ext_proc hot path.
 
     Pure-memory fast path: if not expired and the periodic window hasn't
     rolled, return the snapshot unchanged (zero DB work). Otherwise open

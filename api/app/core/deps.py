@@ -36,9 +36,25 @@ async def get_api_key(
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> tuple[ApiKey, User]:
+    return await _load_api_key_from_plain(_plain_from_bearer(authorization), db)
+
+
+async def get_api_key_any(
+    authorization: str | None = Header(None),
+    x_api_key: str | None = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> tuple[ApiKey, User]:
+    plain = (x_api_key or "").strip() or _plain_from_bearer(authorization)
+    return await _load_api_key_from_plain(plain, db)
+
+
+def _plain_from_bearer(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing api key")
-    plain = authorization.split(" ", 1)[1].strip()
+    return authorization.split(" ", 1)[1].strip()
+
+
+async def _load_api_key_from_plain(plain: str, db: AsyncSession) -> tuple[ApiKey, User]:
     if not plain.startswith("sk-"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid api key format")
     h = hash_api_key(plain)

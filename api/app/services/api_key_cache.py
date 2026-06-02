@@ -1,6 +1,6 @@
-"""Per-process snapshot caches for the ext_authz hot path.
+"""Per-process snapshot caches for the ext_proc hot path.
 
-`relay.authz` is called by envoy for every LLM request. Going to PG 4–5
+The external processor is called by envoy for every LLM request. Going to PG 4–5
 times per request is the main throughput bottleneck once envoy is in
 front. We cache lightweight read-only dataclasses (no ORM session
 binding) keyed by:

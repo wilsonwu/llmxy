@@ -249,6 +249,8 @@ async def _write_usage_log_only(
 
 async def _ingest_entry(entry) -> None:
     headers = dict(entry.request.request_headers or {})
+    if (_hdr(headers, "x-llmxy-billed-sync") or "").lower() == "true":
+        return
     request_id = _hdr(headers, "x-llmxy-request-id") or "-"
     user_id = _hdr(headers, "x-llmxy-user-id")
     api_key_id = _hdr(headers, "x-llmxy-api-key-id")
@@ -257,9 +259,9 @@ async def _ingest_entry(entry) -> None:
     upstream_model = _hdr(headers, "x-llmxy-upstream-model")
     resolved_label = _hdr(headers, "x-llmxy-resolved-label")
 
-    # Classifier overhead — ext_authz forwards these as headers so we can
+    # Classifier overhead — ext_proc forwards these as headers so we can
     # write the classifier UsageLog + bill it in the SAME PG transaction as
-    # the relay row. Without this, the two could split (ext_authz committed,
+    # the relay row. Without this, the two could split (ext_proc allowed,
     # ALS never fired → orphan "classifier-only" rows).
     cls_model_id = _hdr(headers, "x-llmxy-classifier-model-id")
     cls_upstream = _hdr(headers, "x-llmxy-classifier-upstream-model")
@@ -361,7 +363,7 @@ async def _ingest_entry(entry) -> None:
                 ))
             await db.commit()
         # After PG commit succeeds, mirror counters to Redis so the next
-        # ext_authz read sees fresh numbers. Failure here is non-fatal —
+        # ext_proc read sees fresh numbers. Failure here is non-fatal —
         # the cache will self-heal on the next hydrate.
         if structured_breakdown:
             try:

@@ -33,27 +33,33 @@ export function Modal({
   closeOnBackdrop?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    // Move initial focus inside the dialog so Tab cycles within it.
-    setTimeout(() => {
-      const el = ref.current?.querySelector<HTMLElement>(
-        "input,select,textarea,button,[tabindex]:not([tabindex='-1'])",
-      );
+    const focusable = "input:not([type='hidden']):not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled]):not([data-modal-close]),[tabindex]:not([tabindex='-1'])";
+    const focusTimer = window.setTimeout(() => {
+      const el = bodyRef.current?.querySelector<HTMLElement>(focusable)
+        || ref.current?.querySelector<HTMLElement>(focusable);
       el?.focus();
     }, 0);
     return () => {
+      window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -75,6 +81,7 @@ export function Modal({
             <button
               type="button"
               aria-label="Close dialog"
+              data-modal-close
               className="-mr-1 -mt-1 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
               onClick={onClose}
             >
@@ -82,7 +89,7 @@ export function Modal({
             </button>
           </div>
         )}
-        <div className="space-y-3">{children}</div>
+        <div ref={bodyRef} className="space-y-3">{children}</div>
         {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
       </div>
     </div>

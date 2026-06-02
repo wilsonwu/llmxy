@@ -8,12 +8,20 @@ type C = { id?: number; name: string; provider_type: string; base_url: string; a
 
 const empty: C = { name: "", provider_type: "openai", base_url: "https://api.openai.com/v1", api_key_enc: "", enabled: true };
 
-const PROVIDERS = [
-  { id: "openai", label: "OpenAI-compatible (OpenAI/DeepSeek/Moonshot/Qwen...)" },
-  { id: "azure", label: "Azure OpenAI" },
-  { id: "anthropic", label: "Anthropic (Claude)" },
-  { id: "gemini", label: "Google Gemini" },
+const UPSTREAM_PROTOCOLS = [
+  { id: "openai", label: "OpenAI-compatible", hint: "OpenAI, DeepSeek, Moonshot, Qwen, Together, and other /v1-compatible APIs" },
+  { id: "azure", label: "Azure OpenAI", hint: "Azure OpenAI deployment endpoints" },
+  { id: "anthropic", label: "Anthropic", hint: "Claude Messages API" },
+  { id: "gemini", label: "Google Gemini", hint: "Gemini generateContent / embedding APIs" },
 ];
+
+function protocolMeta(id: string) {
+  return UPSTREAM_PROTOCOLS.find((p) => p.id === id) || { id, label: id, hint: "Custom upstream adapter" };
+}
+
+function protocolTone(id: string) {
+  return id === "anthropic" ? "purple" : id === "gemini" ? "warning" : id === "azure" ? "brand" : id === "openai" ? "success" : "neutral";
+}
 
 export default function ChannelsPage() {
   const { data, mutate, isLoading } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
@@ -57,12 +65,14 @@ export default function ChannelsPage() {
       </div>
       <div className="card overflow-x-auto p-0">
         <table className="table">
-          <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>BaseURL</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Name</th><th>Upstream protocol</th><th>BaseURL</th><th>Enabled</th><th></th></tr></thead>
           <tbody>
             {isLoading && <TableSkeleton cols={6} />}
             {!isLoading && filtered.map((c) => (
               <tr key={c.id}>
-                <td>{c.id}</td><td className="font-medium">{c.name}</td><td>{c.provider_type}</td><td className="font-mono text-xs">{c.base_url}</td>
+                <td>{c.id}</td><td className="font-medium">{c.name}</td>
+                <td><Badge tone={protocolTone(c.provider_type)}>{protocolMeta(c.provider_type).label}</Badge></td>
+                <td className="font-mono text-xs">{c.base_url}</td>
                 <td>{c.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
                 <td className="space-x-2 whitespace-nowrap">
                   <button className="btn-outline" onClick={() => setEditing({ ...c, api_key_enc: c.api_key_enc || "" })}>Edit</button>
@@ -95,10 +105,11 @@ export default function ChannelsPage() {
               <input className="input w-full" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
             </div>
             <div>
-              <label className="label">Provider type (channel default protocol)</label>
+              <label className="label">Upstream protocol</label>
               <select className="input w-full" value={editing.provider_type} onChange={(e) => setEditing({ ...editing, provider_type: e.target.value })}>
-                {PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                {UPSTREAM_PROTOCOLS.map((p) => <option key={p.id} value={p.id}>{p.label} - {p.hint}</option>)}
               </select>
+              <p className="mt-1 text-xs text-gray-500">Models can inherit this protocol or override it per model. This value selects the upstream adapter and wire format.</p>
             </div>
             <div>
               <label className="label">Base URL</label>

@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models import ApiKey, Channel, Model, RoutePolicy, RouteScope, UsageLog, User
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user, has_quota
+from app.services.protocols.chat import route_exposes
 from app.services.quota import rate_limit, user_rpm
 from app.core.request_ctx import client_ip, request_id_var
 
@@ -21,7 +22,11 @@ router = APIRouter(prefix="/v1", tags=["relay"])
 
 
 async def _load_route(
-    db: AsyncSession, user_facing_model: str, *, expected_modality: str | None = None
+    db: AsyncSession,
+    user_facing_model: str,
+    *,
+    expected_modality: str | None = None,
+    expected_protocol: str | None = None,
 ) -> tuple[RoutePolicy, dict[int, Model], dict[int, Channel]]:
     policy = (
         await db.execute(select(RoutePolicy).where(RoutePolicy.user_facing_model == user_facing_model))
@@ -34,6 +39,11 @@ async def _load_route(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             f"model {user_facing_model} is not available on the {expected_modality} endpoint",
+        )
+    if expected_protocol is not None and not route_exposes(policy, expected_protocol):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"model {user_facing_model} is not available on the {expected_protocol} protocol",
         )
     target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
     if not target_ids:
@@ -98,7 +108,9 @@ async def chat_completions(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
 
     stream = bool(payload.get("stream"))
-    policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model, expected_modality="chat")
+    policy, models_by_id, channels_by_id = await _load_route(
+        db, user_facing_model, expected_modality="chat", expected_protocol="openai"
+    )
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(
         policy, models_by_id, channels_by_id,

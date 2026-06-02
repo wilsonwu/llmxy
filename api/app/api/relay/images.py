@@ -37,7 +37,9 @@ async def images_generations(
     if not user_facing_model:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
 
-    policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model, expected_modality="image")
+    policy, models_by_id, channels_by_id = await _load_route(
+        db, user_facing_model, expected_modality="image", expected_protocol="openai"
+    )
 
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(

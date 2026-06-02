@@ -13,6 +13,7 @@ type Rule =
   | { type: "code_block"; label: string }
   | { type: "geo"; countries: string[]; label: string };
 type Exemplar = { label: string; text: string };
+type ExposedProtocol = "openai" | "anthropic";
 type R = {
   id?: number;
   user_facing_model: string;
@@ -25,11 +26,13 @@ type R = {
   smart_score_threshold?: number;
   scope: "public" | "private";
   enabled: boolean;
-  // Forwarding modality this route serves. Persisted; each modality is
-  // independent and only the matching endpoint resolves it.
+  // Client-facing modality this route serves. Upstream wire protocol is
+  // selected automatically from each target model's adapter configuration.
   modality: "chat" | "embedding" | "image";
+  exposed_protocols?: ExposedProtocol[];
 };
-type M = { id: number; code: string; display_name: string; kind?: string };
+type M = { id: number; code: string; display_name: string; channel_id: number; upstream_model: string; kind?: string; upstream_protocol?: string | null; enabled?: boolean };
+type C = { id: number; name: string; provider_type: string; enabled?: boolean };
 
 const empty: R = {
   user_facing_model: "",
@@ -43,6 +46,7 @@ const empty: R = {
   scope: "public",
   enabled: true,
   modality: "chat",
+  exposed_protocols: ["openai"],
 };
 
 const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
@@ -81,6 +85,7 @@ const DEFAULT_LABEL = "default";
 export default function RoutesPage() {
   const { data, mutate, isLoading } = useSWR<R[]>("/api/v1/admin/routes", fetcher);
   const { data: models } = useSWR<M[]>("/api/v1/admin/models", fetcher);
+  const { data: channels } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
   const embeddingModels = (models || []).filter((m) => m.kind === "embedding");
   const [editing, setEditing] = useState<R | null>(null);
   const [q, setQ] = useState("");
@@ -89,6 +94,8 @@ export default function RoutesPage() {
 
   async function save(r: R) {
     const payload: R = { ...r };
+    const protocols = routeProtocols(payload);
+    payload.exposed_protocols = payload.modality === "chat" ? protocols : ["openai"];
     if (r.strategy !== "smart") {
       payload.smart_rules_jsonb = [];
       payload.smart_default_label = null;
@@ -113,18 +120,37 @@ export default function RoutesPage() {
       toast("Route deleted", "success");
     } catch (e: any) { toast(e?.message || "Delete failed", "error"); }
   }
-  const modelLabel = (id: number) => models?.find((m) => m.id === id)?.code || `#${id}`;
+  const modelById = (id: number) => models?.find((m) => m.id === id);
+  const channelById = (id: number) => channels?.find((c) => c.id === id);
+  const modelLabel = (id: number) => modelById(id)?.code || `#${id}`;
   const modalityTone = (m: string) => m === "image" ? "purple" : m === "embedding" ? "brand" : "info";
+  const protocolTone = (p: string) => p === "anthropic" ? "purple" : p === "gemini" ? "warning" : p === "azure" ? "brand" : p === "openai" ? "success" : "neutral";
+  function routeProtocols(r: R): ExposedProtocol[] {
+    const raw = r.exposed_protocols?.length ? r.exposed_protocols : ["openai"];
+    const normalized = Array.from(new Set(raw.filter((p): p is ExposedProtocol => p === "openai" || p === "anthropic")));
+    return normalized.length ? normalized : ["openai"];
+  }
+  const effectiveProtocol = (m?: M) => {
+    if (!m) return "unknown";
+    return (m.upstream_protocol || channelById(m.channel_id)?.provider_type || "channel default").toLowerCase();
+  };
+  const modelOptionLabel = (m: M) => {
+    const disabled = m.enabled === false ? " · disabled" : "";
+    return `${m.code} — ${m.display_name} · upstream ${effectiveProtocol(m)} · ${m.upstream_model}${disabled}`;
+  };
 
   const renderTargetSummary = (r: R) =>
     r.targets_jsonb.map((t, i) => {
+      const model = modelById(t.model_id);
+      const protocol = effectiveProtocol(model);
       const extras: string[] = [];
       if (r.strategy === "weighted") extras.push(`w${t.weight}`);
       if (r.strategy === "fallback") extras.push(`o${t.fallback_order}`);
       if (r.strategy === "smart") extras.push(t.label ? `[${t.label}]` : "[no-label]");
       return (
-        <span key={i} className="mr-2">
-          {modelLabel(t.model_id)}({extras.join("/")})
+        <span key={i} className="mr-2 inline-flex items-center gap-1" title={model ? `Auto upstream adapter: ${protocol}; model: ${model.upstream_model}` : undefined}>
+          <span>{modelLabel(t.model_id)}({extras.join("/")})</span>
+          <Badge tone={protocolTone(protocol)}>{protocol}</Badge>
         </span>
       );
     });
@@ -161,6 +187,7 @@ export default function RoutesPage() {
                 <td>
                   <span className="mr-1">{r.user_facing_model}</span>
                   <Badge tone={modalityTone(r.modality || "chat")}>{r.modality || "chat"}</Badge>
+                  {routeProtocols(r).map((p) => <Badge key={p} tone={protocolTone(p)}>{p}</Badge>)}
                 </td>
                 <td>
                   {r.strategy}
@@ -181,6 +208,7 @@ export default function RoutesPage() {
                     smart_exemplars_jsonb: [...(r.smart_exemplars_jsonb || [])],
                     smart_score_threshold: r.smart_score_threshold ?? 55,
                     modality: r.modality || "chat",
+                    exposed_protocols: routeProtocols(r),
                   })}>Edit</button>
                   <button className="btn-danger" onClick={() => del(r.id!, r.user_facing_model)}>Delete</button>
                 </td>
@@ -260,43 +288,60 @@ export default function RoutesPage() {
                 Pick a label for each target — labels come from your rules and exemplars below. The <code>default</code> label catches anything that doesn&apos;t match.
               </p>
             )}
-            {e.targets_jsonb.map((t, i) => (
-              <div key={i} className="mb-2 flex items-center gap-2">
-                <select className="input flex-1" value={t.model_id} onChange={(ev) => {
-                  const v = [...e.targets_jsonb]; v[i] = { ...t, model_id: +ev.target.value };
-                  setEditing({ ...e, targets_jsonb: v });
-                }}>
-                  {models?.filter((m) => (m.kind || "chat") === (e.modality || "chat")).map((m) => (
-                    <option key={m.id} value={m.id}>{m.code} — {m.display_name}</option>
-                  ))}
-                </select>
-                {e.strategy === "weighted" && (
-                  <input className="input w-20" type="number" placeholder="weight" value={t.weight}
-                    onChange={(ev) => {
-                      const v = [...e.targets_jsonb]; v[i] = { ...t, weight: +ev.target.value };
+            {e.targets_jsonb.map((t, i) => {
+              const selected = modelById(t.model_id);
+              const channel = selected ? channelById(selected.channel_id) : undefined;
+              const protocol = effectiveProtocol(selected);
+              const isModelOverride = Boolean(selected?.upstream_protocol);
+              return (
+                <div key={i} className="mb-2 rounded border border-gray-200 bg-white p-2">
+                  <div className="flex items-center gap-2">
+                    <select className="input flex-1" value={t.model_id} onChange={(ev) => {
+                      const v = [...e.targets_jsonb]; v[i] = { ...t, model_id: +ev.target.value };
                       setEditing({ ...e, targets_jsonb: v });
-                    }} />
-                )}
-                {e.strategy === "fallback" && (
-                  <input className="input w-20" type="number" placeholder="order" value={t.fallback_order}
-                    onChange={(ev) => {
-                      const v = [...e.targets_jsonb]; v[i] = { ...t, fallback_order: +ev.target.value };
+                    }}>
+                      {models?.filter((m) => (m.kind || "chat") === (e.modality || "chat")).map((m) => (
+                        <option key={m.id} value={m.id}>{modelOptionLabel(m)}</option>
+                      ))}
+                    </select>
+                    {e.strategy === "weighted" && (
+                      <input className="input w-20" type="number" placeholder="weight" value={t.weight}
+                        onChange={(ev) => {
+                          const v = [...e.targets_jsonb]; v[i] = { ...t, weight: +ev.target.value };
+                          setEditing({ ...e, targets_jsonb: v });
+                        }} />
+                    )}
+                    {e.strategy === "fallback" && (
+                      <input className="input w-20" type="number" placeholder="order" value={t.fallback_order}
+                        onChange={(ev) => {
+                          const v = [...e.targets_jsonb]; v[i] = { ...t, fallback_order: +ev.target.value };
+                          setEditing({ ...e, targets_jsonb: v });
+                        }} />
+                    )}
+                    {e.strategy === "smart" && (
+                      <LabelSelect value={t.label || ""} options={allLabels}
+                        onChange={(v) => {
+                          const arr = [...e.targets_jsonb]; arr[i] = { ...t, label: v };
+                          setEditing({ ...e, targets_jsonb: arr });
+                        }} />
+                    )}
+                    <button className="btn-danger" onClick={() => {
+                      const v = e.targets_jsonb.filter((_, j) => j !== i);
                       setEditing({ ...e, targets_jsonb: v });
-                    }} />
-                )}
-                {e.strategy === "smart" && (
-                  <LabelSelect value={t.label || ""} options={allLabels}
-                    onChange={(v) => {
-                      const arr = [...e.targets_jsonb]; arr[i] = { ...t, label: v };
-                      setEditing({ ...e, targets_jsonb: arr });
-                    }} />
-                )}
-                <button className="btn-danger" onClick={() => {
-                  const v = e.targets_jsonb.filter((_, j) => j !== i);
-                  setEditing({ ...e, targets_jsonb: v });
-                }}>×</button>
-              </div>
-            ))}
+                    }}>×</button>
+                  </div>
+                  {selected && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                      <span>auto upstream</span>
+                      <Badge tone={protocolTone(protocol)}>{protocol}</Badge>
+                      <span>upstream <code>{selected.upstream_model}</code></span>
+                      <span>channel {channel?.name || `#${selected.channel_id}`}</span>
+                      <span>{isModelOverride ? "from model adapter" : "from channel default"}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         );
 
@@ -320,18 +365,46 @@ export default function RoutesPage() {
             </div>
 
             <div>
-              <label className="label">Modality (forward type)</label>
+              <label className="label">Client API type</label>
               <select className="input w-full" value={e.modality || "chat"}
                 onChange={(ev) => {
                   const mod = ev.target.value as R["modality"];
-                  setEditing({ ...e, modality: mod, targets_jsonb: [] });
+                  setEditing({ ...e, modality: mod, targets_jsonb: [], exposed_protocols: mod === "chat" ? routeProtocols(e) : ["openai"] });
                 }}>
-                <option value="chat">chat — /v1/chat/completions</option>
-                <option value="embedding">embedding — /v1/embeddings</option>
-                <option value="image">image — /v1/images/generations</option>
+                <option value="chat">chat</option>
+                <option value="embedding">embedding</option>
+                <option value="image">image</option>
               </select>
               <p className="mt-1 text-xs text-gray-500">
-                Each route serves exactly one modality and is resolved only by its matching endpoint; all targets must be models of that kind. All strategies apply to every modality: weighted (load split), fallback (ordered failover on error), smart (pick by prompt — keyword/geo rules and the embedding classifier work everywhere; chat-oriented presets like code/math are noise for image/embedding prompts). Switching modality clears the current targets.
+                This only chooses the public API shape clients call. It does not force an upstream protocol: each target model automatically uses its own adapter, such as anthropic for Claude, gemini for Gemini, azure for Azure, or openai for compatible providers. Switching API type clears the current targets.
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Public protocols</label>
+              <div className="flex flex-wrap gap-2">
+                {(["openai", "anthropic"] as ExposedProtocol[]).map((p) => {
+                  const checked = routeProtocols(e).includes(p);
+                  const disabled = p === "anthropic" && (e.modality || "chat") !== "chat";
+                  return (
+                    <label key={p} className={`flex items-center gap-2 rounded border px-3 py-2 text-sm ${disabled ? "bg-gray-50 text-gray-400" : "bg-white"}`}>
+                      <input
+                        type="checkbox"
+                        checked={checked && !disabled}
+                        disabled={disabled}
+                        onChange={(ev) => {
+                          const current = routeProtocols(e);
+                          const next = ev.target.checked ? [...current, p] : current.filter((x) => x !== p);
+                          setEditing({ ...e, exposed_protocols: next.length ? Array.from(new Set(next)) : ["openai"] });
+                        }}
+                      />
+                      <span>{p}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                These are the client-facing request and response protocols. Target models still use their own upstream adapters automatically.
               </p>
             </div>
 

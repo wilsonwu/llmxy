@@ -1,6 +1,6 @@
 """Tiny in-process LRU+TTL cache. No external deps.
 
-Used on hot paths (ext_authz) where we want sub-microsecond lookups for
+Used on hot paths (ext_proc) where we want sub-microsecond lookups for
 ApiKey/User metadata and we don't want to pay the cost of a Redis RTT
 on every request.
 

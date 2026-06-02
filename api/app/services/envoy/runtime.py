@@ -118,15 +118,25 @@ async def start(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
     if inst.status == EnvoyStatus.running and _pid_alive(inst.pid):
         return {"status": "running", "pid": inst.pid}
 
-    # Refuse if something else already holds listen_port — otherwise envoy
-    # would crash with EADDRINUSE and we'd leave the DB in a weird half-state.
+    # Refuse if something else already holds either local port — otherwise
+    # envoy would crash with EADDRINUSE and we'd leave the DB in a weird
+    # half-state. Check both listener and admin; the admin bind happens from
+    # bootstrap and otherwise only surfaces as a generic readiness timeout.
     if await _port_in_use(inst.listen_port):
         inst.status = EnvoyStatus.error
         inst.last_error = f"listen_port {inst.listen_port} already in use"
         await db.commit()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"port {inst.listen_port} is already in use by another process",
+            f"listen_port {inst.listen_port} is already in use by another process",
+        )
+    if inst.admin_port and await _port_in_use(inst.admin_port):
+        inst.status = EnvoyStatus.error
+        inst.last_error = f"admin_port {inst.admin_port} already in use"
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"admin_port {inst.admin_port} is already in use by another process",
         )
 
     # 1. (re)write bootstrap.yaml. CDS/LDS/RDS arrive via ADS — nothing else

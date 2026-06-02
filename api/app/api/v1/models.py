@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models import RoutePolicy, RouteScope, User
+from app.services.protocols.chat import route_protocols
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -31,6 +32,7 @@ async def list_models(
         {
             "id": r.user_facing_model,
             "modality": r.modality or "chat",
+            "exposed_protocols": route_protocols(r),
             "strategy": r.strategy.value if hasattr(r.strategy, "value") else r.strategy,
             "target_count": len(r.targets_jsonb or []),
         }

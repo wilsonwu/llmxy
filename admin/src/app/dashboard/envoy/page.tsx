@@ -227,6 +227,8 @@ export default function EnvoyPage() {
   const [localPrecheck, setLocalPrecheck] = useState<LocalPrecheckState | null>(null);
   const [localPrecheckLoading, setLocalPrecheckLoading] = useState(false);
   const [localPrecheckError, setLocalPrecheckError] = useState<string | null>(null);
+  const [localPortsLoading, setLocalPortsLoading] = useState(false);
+  const [localPortsError, setLocalPortsError] = useState<string | null>(null);
 
   async function refreshLocalPrecheck() {
     setLocalPrecheckLoading(true);
@@ -239,6 +241,29 @@ export default function EnvoyPage() {
     } finally {
       setLocalPrecheckLoading(false);
     }
+  }
+
+  async function applySuggestedLocalPorts(target: "create" | "edit" = "create") {
+    setLocalPortsLoading(true);
+    setLocalPortsError(null);
+    try {
+      const r: { listen_port: number; admin_port: number } = await api("/api/v1/admin/envoy/local-ports/suggest");
+      if (target === "edit") {
+        setEditing((cur) => cur && cur.mode === "local" ? { ...cur, listen_port: r.listen_port, admin_port: r.admin_port } : cur);
+      } else {
+        setCreating((cur) => cur && cur.mode === "local" ? { ...cur, listen_port: r.listen_port, admin_port: r.admin_port } : cur);
+      }
+    } catch (e: any) {
+      setLocalPortsError(e.message || "failed to find free local ports");
+    } finally {
+      setLocalPortsLoading(false);
+    }
+  }
+
+  function openCreateDialog() {
+    setLocalPortsError(null);
+    setCreating({ ...emptyForm });
+    applySuggestedLocalPorts("create");
   }
 
   useEffect(() => {
@@ -385,7 +410,7 @@ export default function EnvoyPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Envoy instances</h1>
-        <button className="btn-primary" onClick={() => setCreating({ ...emptyForm })}>
+        <button className="btn-primary" onClick={openCreateDialog}>
           New instance
         </button>
       </div>
@@ -531,6 +556,7 @@ export default function EnvoyPage() {
                     listen_port: newMode === "remote" ? 30000 : 9000,
                     admin_port: newMode === "remote" ? 30001 : 9001,
                   });
+                  if (newMode === "local") setTimeout(() => applySuggestedLocalPorts("create"), 0);
                 }}
               >
                 <option value="local">local — managed subprocess on this host</option>
@@ -707,6 +733,20 @@ export default function EnvoyPage() {
                 />
               </div>
             </div>
+            {creating.mode === "local" && (
+              <div className="flex items-center justify-between gap-2 text-xs text-gray-500">
+                <span>
+                  {localPortsLoading
+                    ? "Finding free local ports..."
+                    : localPortsError
+                      ? localPortsError
+                      : "Ports are checked on this api host before create/start."}
+                </span>
+                <button type="button" className="btn-outline text-xs" onClick={() => applySuggestedLocalPorts("create")} disabled={localPortsLoading}>
+                  {localPortsLoading ? "Checking..." : "Find free ports"}
+                </button>
+              </div>
+            )}
             {creating.mode === "remote" && (
               <p className="text-xs text-gray-500">
                 Externally reachable ports — what clients OUTSIDE the cluster / host hit.
@@ -834,9 +874,12 @@ export default function EnvoyPage() {
               </div>
             </div>
             {editing.mode === "local" && (
-              <p className="text-xs text-amber-700">
-                Port changes only take effect after restart.
-              </p>
+              <div className="flex items-center justify-between gap-2 text-xs text-amber-700">
+                <span>Port changes only take effect after restart.</span>
+                <button type="button" className="btn-outline text-xs" onClick={() => applySuggestedLocalPorts("edit")} disabled={localPortsLoading}>
+                  {localPortsLoading ? "Checking..." : "Find free ports"}
+                </button>
+              </div>
             )}
         </Modal>
       )}

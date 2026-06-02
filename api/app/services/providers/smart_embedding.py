@@ -57,15 +57,20 @@ def _exemplar_cache_key(policy_id: int, version: int) -> str:
     return f"llmxy:smart:exemp:{policy_id}:v{version}"
 
 
+def _adapter_for_model(model: Model, channel: Channel):
+    from app.services import providers as _p
+
+    protocol = model.upstream_protocol or channel.provider_type
+    return protocol, _p.get_adapter(protocol)
+
+
 async def _embed_one(
     model: Model, channel: Channel, text: str
 ) -> tuple[Optional[list[float]], int, str]:
     """Returns (vector_or_None, prompt_tokens, status)."""
-    from app.services import providers as _p
-
-    adapter = _p.get_adapter(channel.provider_type)
+    protocol, adapter = _adapter_for_model(model, channel)
     if not adapter:
-        return None, 0, "no adapter"
+        return None, 0, f"no adapter for {protocol}"
     try:
         status, body = await adapter.embeddings(
             channel, model.upstream_model,
@@ -90,9 +95,7 @@ async def _embed_batch(
     model: Model, channel: Channel, texts: list[str]
 ) -> tuple[list[Optional[list[float]]], int]:
     """Best-effort batch (one-shot OpenAI-style call). Falls back to per-item on error."""
-    from app.services import providers as _p
-
-    adapter = _p.get_adapter(channel.provider_type)
+    protocol, adapter = _adapter_for_model(model, channel)
     if not adapter or not texts:
         return [None] * len(texts), 0
     try:

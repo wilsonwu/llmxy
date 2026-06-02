@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+import socket
 import shutil
 import subprocess
 
@@ -282,6 +283,83 @@ def _local_precheck_error_detail(pc: EnvoyLocalPrecheckOut) -> str:
     return "\n".join(parts) if parts else "local-mode envoy precheck failed"
 
 
+def _port_in_use_sync(port: int) -> bool:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("0.0.0.0", port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
+
+
+async def _port_used_by_local_instance(
+    db: AsyncSession,
+    port: int,
+    *,
+    exclude_id: int | None = None,
+) -> EnvoyInstance | None:
+    stmt = select(EnvoyInstance).where(
+        EnvoyInstance.mode == EnvoyMode.local,
+        or_(EnvoyInstance.listen_port == port, EnvoyInstance.admin_port == port),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(EnvoyInstance.id != exclude_id)
+    return (await db.execute(stmt)).scalars().first()
+
+
+async def _ensure_local_ports_available(
+    db: AsyncSession,
+    *,
+    listen_port: int,
+    admin_port: int,
+    exclude_id: int | None = None,
+) -> None:
+    if listen_port == admin_port:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "listen_port and admin_port must differ")
+    for label, port in (("listen_port", listen_port), ("admin_port", admin_port)):
+        clash = await _port_used_by_local_instance(db, port, exclude_id=exclude_id)
+        if clash:
+            used_as = "listen_port" if clash.listen_port == port else "admin_port"
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{label} {port} already used as {used_as} by local instance id={clash.id} ({clash.name})",
+            )
+        if _port_in_use_sync(port):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{label} {port} is already in use by another process on this host",
+            )
+
+
+async def _find_free_local_pair(
+    db: AsyncSession,
+    *,
+    start_listen: int = 9000,
+    start_admin: int = 9001,
+    exclude_id: int | None = None,
+) -> tuple[int, int]:
+    listen = max(1024, min(65535, start_listen))
+    admin = max(1024, min(65535, start_admin))
+    for offset in range(0, 200):
+        lp = listen + offset * 2
+        ap = admin + offset * 2
+        if ap > 65535:
+            break
+        if lp == ap:
+            continue
+        if await _port_used_by_local_instance(db, lp, exclude_id=exclude_id):
+            continue
+        if await _port_used_by_local_instance(db, ap, exclude_id=exclude_id):
+            continue
+        if _port_in_use_sync(lp) or _port_in_use_sync(ap):
+            continue
+        return lp, ap
+    raise HTTPException(status.HTTP_409_CONFLICT, "no free local envoy port pair found near 9000/9001")
+
+
 def _ensure_local(inst: EnvoyInstance) -> None:
     if inst.mode == EnvoyMode.remote:
         raise HTTPException(
@@ -335,6 +413,15 @@ async def local_precheck(_: User = Depends(require_admin)):
     return _local_precheck()
 
 
+@router.get("/local-ports/suggest")
+async def suggest_local_ports(
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    listen_port, admin_port = await _find_free_local_pair(db)
+    return {"listen_port": listen_port, "admin_port": admin_port}
+
+
 @router.post("/test-connection", response_model=EnvoyTestConnOut)
 async def test_connection(
     req: EnvoyTestConnIn,
@@ -385,8 +472,9 @@ async def create_instance(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, _local_precheck_error_detail(pc))
         if req.admin_port is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "admin_port required for local mode")
-        if req.listen_port == req.admin_port:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "listen_port and admin_port must differ")
+        await _ensure_local_ports_available(
+            db, listen_port=req.listen_port, admin_port=req.admin_port
+        )
     else:
         # Remote: require host + admin_port. The expected flow is: operator
         # opens the create dialog → picks remote → UI shows deploy manifests
@@ -417,25 +505,6 @@ async def create_instance(
             status.HTTP_409_CONFLICT,
             f"name already in use by instance id={name_clash.id} ({name_clash.name})",
         )
-    if mode == EnvoyMode.local:
-        port_filters = [EnvoyInstance.listen_port == req.listen_port]
-        if req.admin_port:
-            port_filters.append(EnvoyInstance.admin_port == req.admin_port)
-        port_clash = (
-            await db.execute(
-                select(EnvoyInstance).where(
-                    EnvoyInstance.mode == EnvoyMode.local,
-                    or_(*port_filters),
-                )
-            )
-        ).scalars().first()
-        if port_clash:
-            reason = "listen_port" if port_clash.listen_port == req.listen_port else "admin_port"
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"{reason} already in use by local instance id={port_clash.id} ({port_clash.name})",
-            )
-
     if mode == EnvoyMode.local:
         cfg_dir, log_dir = _paths(req.name)
         try:
@@ -541,6 +610,17 @@ async def update_instance(
         new_admin = req.admin_port if req.admin_port is not None else inst.admin_port
         if not new_admin:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "admin_port required for local mode")
+        if inst.status == EnvoyStatus.running and (
+            new_listen != inst.listen_port or new_admin != inst.admin_port
+        ):
+            raise HTTPException(status.HTTP_409_CONFLICT, "stop the local envoy before changing ports")
+        if new_listen != inst.listen_port or new_admin != inst.admin_port:
+            await _ensure_local_ports_available(
+                db,
+                listen_port=new_listen,
+                admin_port=new_admin,
+                exclude_id=inst_id,
+            )
         if new_listen == new_admin:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "listen_port and admin_port must differ")
         if req.listen_port is not None and req.listen_port != inst.listen_port:

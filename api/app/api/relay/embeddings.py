@@ -31,7 +31,9 @@ async def embeddings(
     user_facing_model = payload.get("model")
     if not user_facing_model:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
-    policy, models_by_id, channels_by_id = await _load_route(db, user_facing_model, expected_modality="embedding")
+    policy, models_by_id, channels_by_id = await _load_route(
+        db, user_facing_model, expected_modality="embedding", expected_protocol="openai"
+    )
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(
         policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,

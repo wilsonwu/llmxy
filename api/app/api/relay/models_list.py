@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_api_key
 from app.db.session import get_db
 from app.models import ApiKey, RoutePolicy, RouteScope, User
+from app.services.protocols.chat import route_exposes
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
@@ -27,5 +28,6 @@ async def list_models(
     data = [
         {"id": r.user_facing_model, "object": "model", "owned_by": "llmxy"}
         for r in rows
+        if route_exposes(r, "openai")
     ]
     return {"object": "list", "data": data}

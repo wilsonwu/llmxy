@@ -130,7 +130,7 @@ class PaymentInitResp(BaseModel):
 # -------- Channels / Models / Routes --------
 class ChannelIn(BaseModel):
     name: str
-    provider_type: str = "openai"  # openai / anthropic / gemini
+    provider_type: str = "openai"  # upstream protocol: openai / azure / anthropic / gemini
     base_url: str
     api_key_enc: Optional[str] = None
     enabled: bool = True
@@ -149,7 +149,7 @@ class ModelIn(BaseModel):
     channel_id: int
     upstream_model: str
     kind: str = "chat"  # "chat" | "embedding" | "image"
-    upstream_protocol: Optional[str] = None  # per-model upstream protocol override
+    upstream_protocol: Optional[str] = None  # per-model override; None = inherit channel provider_type
     prompt_rate: int = 0  # micro-cent / 1K tokens
     completion_rate: int = 0
     pricing_jsonb: dict = {}  # modality pricing; see Model.pricing_jsonb
@@ -192,6 +192,7 @@ class RouteExemplar(BaseModel):
 class RoutePolicyIn(BaseModel):
     user_facing_model: str
     modality: str = "chat"  # chat | embedding | image
+    exposed_protocols: list[str] = Field(default_factory=lambda: ["openai"])  # openai | anthropic (chat only)
     strategy: str = "weighted"  # weighted/smart/fallback
     targets_jsonb: list[RouteTarget] = []
     smart_rules_jsonb: list[RouteRule] = []
@@ -207,6 +208,7 @@ class RoutePolicyOut(BaseModel):
     id: int
     user_facing_model: str
     modality: str = "chat"
+    exposed_protocols: list[str] = Field(default_factory=lambda: ["openai"])
     strategy: str
     targets_jsonb: list[dict]
     smart_rules_jsonb: list[dict] = []
