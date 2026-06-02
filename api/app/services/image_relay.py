@@ -79,7 +79,7 @@ async def execute_image_relay(
         # The image wire protocol is chosen per-model (upstream_protocol), NOT
         # by the channel's chat provider_type — image APIs vary too much to
         # share one implicit protocol. Fall back to provider_type when unset.
-        protocol = model.upstream_protocol or channel.provider_type
+        protocol = providers.resolve_adapter_protocol(model, channel)
         adapter = providers.get_image_adapter(protocol)
         if not adapter:
             last_status, last_body = 502, {"error": {"message": f"no image adapter for protocol {protocol}"}}

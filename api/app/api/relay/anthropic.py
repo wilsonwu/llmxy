@@ -79,7 +79,7 @@ async def messages(
         async def streamer() -> AsyncIterator[bytes]:
             last_err: str | None = None
             for m, c in candidates:
-                protocol = m.upstream_protocol or c.provider_type
+                protocol = providers.resolve_adapter_protocol(m, c)
                 adapter = providers.get_adapter(protocol)
                 if not adapter:
                     last_err = f"no adapter for {protocol}"
@@ -125,7 +125,7 @@ async def messages(
 
     last_err = None
     for m, c in candidates:
-        protocol = m.upstream_protocol or c.provider_type
+        protocol = providers.resolve_adapter_protocol(m, c)
         adapter = providers.get_adapter(protocol)
         if not adapter:
             last_err = f"no adapter for {protocol}"

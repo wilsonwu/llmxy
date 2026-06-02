@@ -261,7 +261,7 @@ async def _decide(headers: dict[str, str], body: bytes) -> tuple[int, str] | dic
             return 502, "no available upstream"
 
         m, c = decision.model, decision.channel
-        eff_protocol = (m.upstream_protocol or c.provider_type or "openai").lower()
+        eff_protocol = providers.resolve_adapter_protocol(m, c)
         out = {
             "x-llmxy-cluster": "translator",
             "x-llmxy-request-id": request_id,

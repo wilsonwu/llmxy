@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.models import Channel, Model, User
 from app.schemas import ModelIn, ModelOut
 from app.services.envoy.config import regenerate_all_running
-from app.services.providers import SUPPORTED, SUPPORTED_IMAGE_PROTOCOLS
+from app.services.providers import SUPPORTED, SUPPORTED_IMAGE_PROTOCOLS, channel_locks_adapter
 
 router = APIRouter(prefix="/models", tags=["admin-models"])
 
@@ -25,7 +25,15 @@ async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
     channel = await db.get(Channel, req.channel_id)
     if not channel:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"channel {req.channel_id} not found")
-    proto = (req.upstream_protocol or channel.provider_type or "").lower()
+    channel_protocol = (channel.provider_type or "").lower()
+    override = (req.upstream_protocol or "").lower()
+    if override and channel_locks_adapter(channel_protocol) and override != channel_protocol:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"model upstream_protocol {override!r} cannot override provider-specific channel protocol {channel_protocol!r}; "
+            "clear the override to inherit the channel protocol",
+        )
+    proto = override or channel_protocol
     if req.kind == "image":
         allowed = SUPPORTED_IMAGE_PROTOCOLS
     elif req.kind == "embedding":

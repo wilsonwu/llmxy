@@ -128,9 +128,10 @@ async def chat_completions(
         async def streamer() -> AsyncIterator[bytes]:
             last_err: str | None = None
             for m, c in candidates:
-                adapter = providers.get_adapter(m.upstream_protocol or c.provider_type)
+                protocol = providers.resolve_adapter_protocol(m, c)
+                adapter = providers.get_adapter(protocol)
                 if not adapter:
-                    last_err = f"no adapter for {m.upstream_protocol or c.provider_type}"
+                    last_err = f"no adapter for {protocol}"
                     continue
                 try:
                     result = await adapter.chat(c, m.upstream_model, payload, stream=True)
@@ -166,9 +167,10 @@ async def chat_completions(
 
     last_err = None
     for m, c in candidates:
-        adapter = providers.get_adapter(m.upstream_protocol or c.provider_type)
+        protocol = providers.resolve_adapter_protocol(m, c)
+        adapter = providers.get_adapter(protocol)
         if not adapter:
-            last_err = f"no adapter for {m.upstream_protocol or c.provider_type}"; continue
+            last_err = f"no adapter for {protocol}"; continue
         try:
             result = await adapter.chat(c, m.upstream_model, payload, stream=False)
         except Exception as e:

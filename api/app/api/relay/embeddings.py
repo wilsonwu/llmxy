@@ -41,7 +41,7 @@ async def embeddings(
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no upstream")
 
-    protocol = decision.model.upstream_protocol or decision.channel.provider_type
+    protocol = providers.resolve_adapter_protocol(decision.model, decision.channel)
     adapter = providers.get_adapter(protocol)
     if not adapter:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")

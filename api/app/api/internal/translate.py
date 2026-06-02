@@ -174,7 +174,7 @@ async def chat_completions(
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = x_llmxy_upstream_protocol or channel.provider_type
+        protocol = providers.resolve_adapter_protocol(None, channel, x_llmxy_upstream_protocol)
         adapter = providers.get_adapter(protocol)
         if not adapter:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")
@@ -273,7 +273,7 @@ async def messages(
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = x_llmxy_upstream_protocol or channel.provider_type
+        protocol = providers.resolve_adapter_protocol(None, channel, x_llmxy_upstream_protocol)
         adapter = providers.get_adapter(protocol)
         if not adapter:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")
@@ -366,7 +366,7 @@ async def embeddings(
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = x_llmxy_upstream_protocol or channel.provider_type
+        protocol = providers.resolve_adapter_protocol(None, channel, x_llmxy_upstream_protocol)
         adapter = providers.get_adapter(protocol)
         if not adapter:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")

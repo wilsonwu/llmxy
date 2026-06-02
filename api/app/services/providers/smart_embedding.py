@@ -60,7 +60,7 @@ def _exemplar_cache_key(policy_id: int, version: int) -> str:
 def _adapter_for_model(model: Model, channel: Channel):
     from app.services import providers as _p
 
-    protocol = model.upstream_protocol or channel.provider_type
+    protocol = _p.resolve_adapter_protocol(model, channel)
     return protocol, _p.get_adapter(protocol)
 
 
