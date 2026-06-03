@@ -16,6 +16,13 @@ class ChatResult:
 
 
 class ProviderAdapter(Protocol):
+    """Provider adapters consume and produce the internal chat contract.
+
+    Chat input is OpenAI chat-completions shape. Chat output is OpenAI-shape
+    JSON or OpenAI-format SSE bytes. Client-facing protocol endpoints are
+    responsible for converting into and out of this contract.
+    """
+
     name: str
 
     async def chat(

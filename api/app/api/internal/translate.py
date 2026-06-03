@@ -60,6 +60,39 @@ async def _load_channel(db: AsyncSession, channel_id: str | None) -> Channel:
     return ch
 
 
+async def _load_chat_candidates(
+    db: AsyncSession,
+    *,
+    chain_header: str | None,
+    fallback_model_id: str | None,
+    fallback_channel_id: str | None,
+    fallback_upstream_model: str | None,
+) -> list[tuple[Model | None, Channel, str]]:
+    candidates: list[tuple[Model | None, Channel, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for item in (chain_header or "").split(","):
+        model_id, sep, channel_id = item.strip().partition(":")
+        if sep != ":" or not model_id.isdigit() or not channel_id.isdigit():
+            continue
+        key = (int(model_id), int(channel_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        model = await db.get(Model, key[0])
+        channel = await db.get(Channel, key[1])
+        if model and model.enabled and channel and channel.enabled:
+            candidates.append((model, channel, model.upstream_model))
+    if candidates:
+        return candidates
+
+    channel = await _load_channel(db, fallback_channel_id)
+    model = await db.get(Model, int(fallback_model_id)) if (fallback_model_id and fallback_model_id.isdigit()) else None
+    upstream_model = fallback_upstream_model or (model.upstream_model if model else None)
+    if not upstream_model:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing x-llmxy-upstream-model")
+    return [(model, channel, upstream_model)]
+
+
 async def _billing_context(
     db: AsyncSession,
     *,
@@ -163,6 +196,7 @@ async def chat_completions(
     x_llmxy_user_facing_model: str | None = Header(None),
     x_llmxy_upstream_model: str | None = Header(None),
     x_llmxy_upstream_protocol: str | None = Header(None),
+    x_llmxy_chat_chain: str | None = Header(None),
     x_llmxy_request_id: str | None = Header(None),
     x_llmxy_resolved_label: str | None = Header(None),
     x_llmxy_classifier_model_id: str | None = Header(None),
@@ -173,13 +207,13 @@ async def chat_completions(
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = providers.resolve_adapter_protocol(None, channel, x_llmxy_upstream_protocol)
-        adapter = providers.get_adapter(protocol)
-        if not adapter:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")
-        if not x_llmxy_upstream_model:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing x-llmxy-upstream-model")
+        candidates = await _load_chat_candidates(
+            db,
+            chain_header=x_llmxy_chat_chain,
+            fallback_model_id=x_llmxy_model_id,
+            fallback_channel_id=x_llmxy_channel_id,
+            fallback_upstream_model=x_llmxy_upstream_model,
+        )
 
         try:
             payload = await request.json()
@@ -188,7 +222,7 @@ async def chat_completions(
         stream = bool(payload.get("stream"))
         started = time.time()
         request_id = x_llmxy_request_id or f"req-{uuid.uuid4().hex[:16]}"
-        user, api_key, model = await _billing_context(
+        user, api_key, header_model = await _billing_context(
             db, user_id=x_llmxy_user_id, api_key_id=x_llmxy_api_key_id, model_id=x_llmxy_model_id
         )
         classifier_headers = {
@@ -199,57 +233,71 @@ async def chat_completions(
             "status": x_llmxy_classifier_status,
         }
 
-        try:
-            result = await adapter.chat(channel, x_llmxy_upstream_model, payload, stream=stream)
-        except Exception as e:
-            log.warning("translator adapter error: %s", e)
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+        last_err: object = None
+        for candidate_model, channel, upstream_model in candidates:
+            requested_protocol = x_llmxy_upstream_protocol if candidate_model is None else None
+            protocol = providers.resolve_adapter_protocol(candidate_model, channel, requested_protocol)
+            adapter = providers.get_adapter(protocol)
+            if not adapter:
+                last_err = f"no adapter for {protocol}"
+                continue
+            try:
+                result = await adapter.chat(channel, upstream_model, payload, stream=stream)
+            except Exception as e:
+                log.warning("translator adapter error: %s", e)
+                last_err = str(e)
+                continue
 
-        if stream:
-            if result.status != 200 or result.stream is None:
-                raise HTTPException(result.status or 502, str(result.body))
-            async def stream_and_bill() -> AsyncIterator[bytes]:
-                prompt_tokens = 0
-                completion_tokens = 0
-                async for chunk in result.stream:
-                    usage = providers.parse_usage_from_chunk(chunk)
-                    if usage:
-                        prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens or 0)
-                        completion_tokens = int(usage.get("completion_tokens") or completion_tokens or 0)
-                    yield chunk
-                await _bill_chat_relay(
-                    db,
-                    user=user,
-                    api_key=api_key,
-                    model=model,
-                    user_facing_model=x_llmxy_user_facing_model,
-                    upstream_model=x_llmxy_upstream_model,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    started=started,
-                    request_id=request_id,
-                    resolved_label=x_llmxy_resolved_label,
-                    classifier_headers=classifier_headers,
-                )
-            return StreamingResponse(stream_and_bill(), media_type="text/event-stream")
+            bill_model = candidate_model or header_model
+            if stream:
+                if result.status != 200 or result.stream is None:
+                    last_err = result.body
+                    continue
 
-        if result.status != 200 or not result.body:
-            raise HTTPException(result.status or 502, str(result.body))
-        await _bill_chat_relay(
-            db,
-            user=user,
-            api_key=api_key,
-            model=model,
-            user_facing_model=x_llmxy_user_facing_model,
-            upstream_model=x_llmxy_upstream_model,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            started=started,
-            request_id=request_id,
-            resolved_label=x_llmxy_resolved_label,
-            classifier_headers=classifier_headers,
-        )
-        return JSONResponse(result.body)
+                async def stream_and_bill() -> AsyncIterator[bytes]:
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    async for chunk in result.stream:
+                        usage = providers.parse_usage_from_chunk(chunk)
+                        if usage:
+                            prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens or 0)
+                            completion_tokens = int(usage.get("completion_tokens") or completion_tokens or 0)
+                        yield chunk
+                    await _bill_chat_relay(
+                        db,
+                        user=user,
+                        api_key=api_key,
+                        model=bill_model,
+                        user_facing_model=x_llmxy_user_facing_model,
+                        upstream_model=upstream_model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        started=started,
+                        request_id=request_id,
+                        resolved_label=x_llmxy_resolved_label,
+                        classifier_headers=classifier_headers,
+                    )
+                return StreamingResponse(stream_and_bill(), media_type="text/event-stream")
+
+            if result.status != 200 or not result.body:
+                last_err = result.body
+                continue
+            await _bill_chat_relay(
+                db,
+                user=user,
+                api_key=api_key,
+                model=bill_model,
+                user_facing_model=x_llmxy_user_facing_model,
+                upstream_model=upstream_model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                started=started,
+                request_id=request_id,
+                resolved_label=x_llmxy_resolved_label,
+                classifier_headers=classifier_headers,
+            )
+            return JSONResponse(result.body)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")
 
 
 @router.post("/v1/messages")
@@ -262,6 +310,7 @@ async def messages(
     x_llmxy_user_facing_model: str | None = Header(None),
     x_llmxy_upstream_model: str | None = Header(None),
     x_llmxy_upstream_protocol: str | None = Header(None),
+    x_llmxy_chat_chain: str | None = Header(None),
     x_llmxy_request_id: str | None = Header(None),
     x_llmxy_resolved_label: str | None = Header(None),
     x_llmxy_classifier_model_id: str | None = Header(None),
@@ -272,13 +321,13 @@ async def messages(
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = providers.resolve_adapter_protocol(None, channel, x_llmxy_upstream_protocol)
-        adapter = providers.get_adapter(protocol)
-        if not adapter:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")
-        if not x_llmxy_upstream_model:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing x-llmxy-upstream-model")
+        candidates = await _load_chat_candidates(
+            db,
+            chain_header=x_llmxy_chat_chain,
+            fallback_model_id=x_llmxy_model_id,
+            fallback_channel_id=x_llmxy_channel_id,
+            fallback_upstream_model=x_llmxy_upstream_model,
+        )
 
         try:
             payload = await request.json()
@@ -288,7 +337,7 @@ async def messages(
         stream = bool(payload.get("stream"))
         started = time.time()
         request_id = x_llmxy_request_id or f"req-{uuid.uuid4().hex[:16]}"
-        user, api_key, model = await _billing_context(
+        user, api_key, header_model = await _billing_context(
             db, user_id=x_llmxy_user_id, api_key_id=x_llmxy_api_key_id, model_id=x_llmxy_model_id
         )
         classifier_headers = {
@@ -299,61 +348,75 @@ async def messages(
             "status": x_llmxy_classifier_status,
         }
 
-        try:
-            result = await adapter.chat(channel, x_llmxy_upstream_model, openai_payload, stream=stream)
-        except Exception as e:
-            log.warning("translator messages adapter error: %s", e)
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+        response_model = x_llmxy_user_facing_model or payload.get("model") or x_llmxy_upstream_model or "model"
+        last_err: object = None
+        for candidate_model, channel, upstream_model in candidates:
+            requested_protocol = x_llmxy_upstream_protocol if candidate_model is None else None
+            protocol = providers.resolve_adapter_protocol(candidate_model, channel, requested_protocol)
+            adapter = providers.get_adapter(protocol)
+            if not adapter:
+                last_err = f"no adapter for {protocol}"
+                continue
+            try:
+                result = await adapter.chat(channel, upstream_model, openai_payload, stream=stream)
+            except Exception as e:
+                log.warning("translator messages adapter error: %s", e)
+                last_err = str(e)
+                continue
 
-        if stream:
-            if result.status != 200 or result.stream is None:
-                raise HTTPException(result.status or 502, str(result.body))
+            bill_model = candidate_model or header_model
+            if stream:
+                if result.status != 200 or result.stream is None:
+                    last_err = result.body
+                    continue
 
-            async def stream_and_bill() -> AsyncIterator[bytes]:
-                converter = OpenAIToAnthropicStream(model=x_llmxy_user_facing_model or payload.get("model") or x_llmxy_upstream_model)
-                async for chunk in result.stream:
-                    usage = providers.parse_usage_from_chunk(chunk)
-                    if usage:
-                        converter.prompt_tokens = int(usage.get("prompt_tokens") or converter.prompt_tokens or 0)
-                        converter.completion_tokens = int(usage.get("completion_tokens") or converter.completion_tokens or 0)
-                    for event in converter.feed(chunk):
+                async def stream_and_bill() -> AsyncIterator[bytes]:
+                    converter = OpenAIToAnthropicStream(model=response_model)
+                    async for chunk in result.stream:
+                        usage = providers.parse_usage_from_chunk(chunk)
+                        if usage:
+                            converter.prompt_tokens = int(usage.get("prompt_tokens") or converter.prompt_tokens or 0)
+                            converter.completion_tokens = int(usage.get("completion_tokens") or converter.completion_tokens or 0)
+                        for event in converter.feed(chunk):
+                            yield event
+                    for event in converter.finish():
                         yield event
-                for event in converter.finish():
-                    yield event
-                await _bill_chat_relay(
-                    db,
-                    user=user,
-                    api_key=api_key,
-                    model=model,
-                    user_facing_model=x_llmxy_user_facing_model,
-                    upstream_model=x_llmxy_upstream_model,
-                    prompt_tokens=converter.prompt_tokens,
-                    completion_tokens=converter.completion_tokens,
-                    started=started,
-                    request_id=request_id,
-                    resolved_label=x_llmxy_resolved_label,
-                    classifier_headers=classifier_headers,
-                )
+                    await _bill_chat_relay(
+                        db,
+                        user=user,
+                        api_key=api_key,
+                        model=bill_model,
+                        user_facing_model=x_llmxy_user_facing_model,
+                        upstream_model=upstream_model,
+                        prompt_tokens=converter.prompt_tokens,
+                        completion_tokens=converter.completion_tokens,
+                        started=started,
+                        request_id=request_id,
+                        resolved_label=x_llmxy_resolved_label,
+                        classifier_headers=classifier_headers,
+                    )
 
-            return StreamingResponse(stream_and_bill(), media_type="text/event-stream")
+                return StreamingResponse(stream_and_bill(), media_type="text/event-stream")
 
-        if result.status != 200 or not result.body:
-            raise HTTPException(result.status or 502, str(result.body))
-        await _bill_chat_relay(
-            db,
-            user=user,
-            api_key=api_key,
-            model=model,
-            user_facing_model=x_llmxy_user_facing_model,
-            upstream_model=x_llmxy_upstream_model,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            started=started,
-            request_id=request_id,
-            resolved_label=x_llmxy_resolved_label,
-            classifier_headers=classifier_headers,
-        )
-        return JSONResponse(openai_to_anthropic_response(result.body, x_llmxy_user_facing_model or payload.get("model") or x_llmxy_upstream_model))
+            if result.status != 200 or not result.body:
+                last_err = result.body
+                continue
+            await _bill_chat_relay(
+                db,
+                user=user,
+                api_key=api_key,
+                model=bill_model,
+                user_facing_model=x_llmxy_user_facing_model,
+                upstream_model=upstream_model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                started=started,
+                request_id=request_id,
+                resolved_label=x_llmxy_resolved_label,
+                classifier_headers=classifier_headers,
+            )
+            return JSONResponse(openai_to_anthropic_response(result.body, response_model))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")
 
 
 @router.post("/v1/embeddings")

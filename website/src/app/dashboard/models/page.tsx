@@ -43,32 +43,37 @@ function labelForTab(tab: Tab) {
   return "chat";
 }
 
+function buildCurlCommand(url: string, headers: string[], body: Record<string, unknown>) {
+  return [
+    `curl ${url}`,
+    ...headers.map((header) => `  -H "${header}"`),
+    `  -d '${JSON.stringify(body)}'`,
+  ].join(" \\\n");
+}
+
 function buildCurl(tab: Tab, protocol: ClientProtocol, base: string, key: string, model: string) {
   if (protocol === "anthropic") {
-    const body = JSON.stringify({ model, max_tokens: 1024, messages: [{ role: "user", content: "Hello!" }], ...(tab === "chat-stream" ? { stream: true } : {}) });
-    return `curl ${base}/v1/messages \
-  -H "x-api-key: ${key}" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '${body}'`;
+    const body: Record<string, unknown> = { model, max_tokens: 1024, messages: [{ role: "user", content: "Hello!" }] };
+    if (tab === "chat-stream") body.stream = true;
+    return buildCurlCommand(`${base}/v1/messages`, [
+      `x-api-key: ${key}`,
+      "anthropic-version: 2023-06-01",
+      "Content-Type: application/json",
+    ], body);
   }
-  const auth = `-H "Authorization: Bearer ${key}"`;
-  const ct = `-H "Content-Type: application/json"`;
+  const headers = [`Authorization: Bearer ${key}`, "Content-Type: application/json"];
   if (tab === "embeddings") {
-    const body = JSON.stringify({ model, input: "hello world" });
-    return `curl ${base}/v1/embeddings \\\n  ${auth} \\\n  ${ct} \\\n  -d '${body}'`;
+    return buildCurlCommand(`${base}/v1/embeddings`, headers, { model, input: "hello world" });
   }
   if (tab === "image") {
-    const body = JSON.stringify({ model, prompt: "a red panda coding", n: 1, size: "1024x1024" });
-    return `curl ${base}/v1/images/generations \\\n  ${auth} \\\n  ${ct} \\\n  -d '${body}'`;
+    return buildCurlCommand(`${base}/v1/images/generations`, headers, { model, prompt: "a red panda coding", n: 1, size: "1024x1024" });
   }
   const payload: Record<string, unknown> = {
     model,
     messages: [{ role: "user", content: "Hello!" }],
   };
   if (tab === "chat-stream") payload.stream = true;
-  const body = JSON.stringify(payload);
-  return `curl ${base}/v1/chat/completions \\\n  ${auth} \\\n  ${ct} \\\n  -d '${body}'`;
+  return buildCurlCommand(`${base}/v1/chat/completions`, headers, payload);
 }
 
 function buildJs(tab: Tab, protocol: ClientProtocol, base: string, key: string, model: string) {

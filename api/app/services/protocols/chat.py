@@ -22,6 +22,16 @@ def route_protocols(route: Any) -> list[str]:
     return protocols or ["openai"]
 
 
+def openai_chat_token_limit(payload: dict[str, Any] | None, default: Any = None) -> Any:
+    if not isinstance(payload, dict):
+        return default
+    if payload.get("max_completion_tokens") is not None:
+        return payload.get("max_completion_tokens")
+    if payload.get("max_tokens") is not None:
+        return payload.get("max_tokens")
+    return default
+
+
 def anthropic_to_openai_payload(payload: dict[str, Any]) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     system = payload.get("system")

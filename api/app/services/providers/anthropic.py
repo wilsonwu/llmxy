@@ -3,13 +3,48 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 
 from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
+from app.services.protocols.chat import openai_chat_token_limit
+
+
+def _openai_content_to_anthropic(content: Any) -> Any:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    blocks: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        typ = block.get("type")
+        if typ == "text":
+            blocks.append({"type": "text", "text": block.get("text") or ""})
+        elif typ == "image_url":
+            image_url = block.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else image_url
+            source = _image_url_source(url)
+            if source:
+                blocks.append({"type": "image", "source": source})
+        else:
+            blocks.append(block)
+    return blocks or ""
+
+
+def _image_url_source(url: Any) -> dict[str, str] | None:
+    if not isinstance(url, str) or not url:
+        return None
+    if url.startswith("data:") and ";base64," in url:
+        header, data = url.split(",", 1)
+        media_type = header[5:].split(";", 1)[0]
+        if media_type and data:
+            return {"type": "base64", "media_type": media_type, "data": data}
+    return {"type": "url", "url": url}
 
 
 def _to_anthropic(payload: dict) -> tuple[dict, str | None]:
@@ -28,11 +63,10 @@ def _to_anthropic(payload: dict) -> tuple[dict, str | None]:
             continue
         if role not in ("user", "assistant"):
             continue
-        # Anthropic content may be str or list of blocks; pass through if list
-        out_msgs.append({"role": role, "content": content})
+        out_msgs.append({"role": role, "content": _openai_content_to_anthropic(content)})
     body: dict = {
         "messages": out_msgs,
-        "max_tokens": payload.get("max_tokens", 1024),
+        "max_tokens": openai_chat_token_limit(payload, 1024),
     }
     if system_parts:
         body["system"] = "\n\n".join(system_parts)

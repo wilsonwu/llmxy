@@ -10,6 +10,7 @@ import httpx
 from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
+from app.services.protocols.chat import openai_chat_token_limit
 
 
 def _to_gemini(payload: dict) -> dict:
@@ -34,7 +35,8 @@ def _to_gemini(payload: dict) -> dict:
     gen_cfg: dict = {}
     if "temperature" in payload: gen_cfg["temperature"] = payload["temperature"]
     if "top_p" in payload: gen_cfg["topP"] = payload["top_p"]
-    if "max_tokens" in payload: gen_cfg["maxOutputTokens"] = payload["max_tokens"]
+    max_tokens = openai_chat_token_limit(payload)
+    if max_tokens is not None: gen_cfg["maxOutputTokens"] = max_tokens
     if "stop" in payload:
         s = payload["stop"]; gen_cfg["stopSequences"] = s if isinstance(s, list) else [s]
     if gen_cfg:

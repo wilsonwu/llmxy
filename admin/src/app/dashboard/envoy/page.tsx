@@ -266,6 +266,13 @@ export default function EnvoyPage() {
     applySuggestedLocalPorts("create");
   }
 
+  function closeCreateDialog() {
+    setCreating(null);
+    setTestResult(null);
+    setPreviewData(null);
+    setPreviewError(null);
+  }
+
   useEffect(() => {
     if (creating?.mode === "local" && !localPrecheck && !localPrecheckLoading) {
       refreshLocalPrecheck();
@@ -536,9 +543,28 @@ export default function EnvoyPage() {
       </div>
 
       {creating && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30">
-          <div className={`card max-h-[90vh] space-y-3 overflow-auto ${creating.mode === "remote" ? "w-[720px]" : "w-[460px]"}`}>
-            <h2 className="text-lg font-semibold">New envoy instance</h2>
+        <Modal
+          open={!!creating}
+          onClose={closeCreateDialog}
+          title="New envoy instance"
+          width={creating.mode === "remote" ? "w-[720px]" : "w-[460px]"}
+          footer={
+            <>
+              <button className="btn-outline" onClick={closeCreateDialog}>Cancel</button>
+              <button
+                className="btn-primary"
+                onClick={create}
+                disabled={
+                  !creating.name
+                  || (creating.mode === "remote" && !creating.host)
+                  || (creating.mode === "local" && localPrecheck !== null && !localPrecheck.ok)
+                }
+              >
+                Create
+              </button>
+            </>
+          }
+        >
             <div>
               <label className="label">Mode</label>
               <select
@@ -771,45 +797,28 @@ export default function EnvoyPage() {
                 Created in stopped state. Click Start to spawn the envoy subprocess.
               </p>
             )}
-
-            <div className="flex justify-end gap-2">
-              <button className="btn-outline" onClick={() => { setCreating(null); setTestResult(null); setPreviewData(null); }}>Cancel</button>
-              <button
-                className="btn-primary"
-                onClick={create}
-                disabled={
-                  !creating.name
-                  || (creating.mode === "remote" && !creating.host)
-                  || (creating.mode === "local" && localPrecheck !== null && !localPrecheck.ok)
-                }
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {yamlPopup && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/40" onClick={() => setYamlPopup(null)}>
-          <div className="card max-h-[85vh] w-[860px] space-y-3 overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">{yamlPopup.title}</h2>
-              <div className="space-x-2">
-                <button
-                  className="btn-outline"
-                  onClick={() => navigator.clipboard.writeText(yamlPopup.body)}
-                >
-                  Copy
-                </button>
-                <button className="btn-outline" onClick={() => setYamlPopup(null)}>Close</button>
-              </div>
-            </div>
-            <pre className="max-h-[70vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
-              {yamlPopup.body}
-            </pre>
-          </div>
-        </div>
+        <Modal
+          open={!!yamlPopup}
+          onClose={() => setYamlPopup(null)}
+          title={yamlPopup.title}
+          width="w-[860px]"
+          footer={
+            <button
+              className="btn-outline"
+              onClick={() => navigator.clipboard.writeText(yamlPopup.body)}
+            >
+              Copy
+            </button>
+          }
+        >
+          <pre className="max-h-[70vh] overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
+            {yamlPopup.body}
+          </pre>
+        </Modal>
       )}
 
       {editing && (
@@ -885,30 +894,28 @@ export default function EnvoyPage() {
       )}
 
       {drawer && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/30" onClick={() => setDrawer(null)}>
-          <div className="card max-h-[80vh] w-[800px] space-y-3 overflow-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
-                {drawer.inst.name} — {drawer.tab}
-              </h2>
-              <div className="space-x-2">
-                {drawer.tab === "deploy" && drawerData && !drawerData.error && (
-                  <button
-                    className="btn-outline"
-                    onClick={() => {
-                      const text =
-                        deploySubTab === "k8s" ? drawerData.k8s_yaml
-                        : deploySubTab === "docker" ? drawerData.docker_run
-                        : drawerData.bootstrap_yaml;
-                      navigator.clipboard.writeText(text);
-                    }}
-                  >
-                    Copy {deploySubTab}
-                  </button>
-                )}
-                <button className="btn-outline" onClick={() => setDrawer(null)}>Close</button>
-              </div>
-            </div>
+        <Modal
+          open={!!drawer}
+          onClose={() => setDrawer(null)}
+          title={`${drawer.inst.name} — ${drawer.tab}`}
+          width="w-[800px]"
+          footer={
+            drawer.tab === "deploy" && drawerData && !drawerData.error ? (
+              <button
+                className="btn-outline"
+                onClick={() => {
+                  const text =
+                    deploySubTab === "k8s" ? drawerData.k8s_yaml
+                    : deploySubTab === "docker" ? drawerData.docker_run
+                    : drawerData.bootstrap_yaml;
+                  navigator.clipboard.writeText(text);
+                }}
+              >
+                Copy {deploySubTab}
+              </button>
+            ) : undefined
+          }
+        >
             {drawerData === null && <div className="text-gray-500">Loading…</div>}
             {drawerData?.error && <div className="text-red-600">{drawerData.error}</div>}
             {drawer.tab === "stats" && drawerData?.counters && (
@@ -990,8 +997,7 @@ export default function EnvoyPage() {
                 </pre>
               </>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

@@ -261,6 +261,7 @@ async def _decide(headers: dict[str, str], body: bytes) -> tuple[int, str] | dic
             return 502, "no available upstream"
 
         m, c = decision.model, decision.channel
+        pairs = [(m, c)] + (decision.fallback_chain or [])
         eff_protocol = providers.resolve_adapter_protocol(m, c)
         out = {
             "x-llmxy-cluster": "translator",
@@ -276,10 +277,11 @@ async def _decide(headers: dict[str, str], body: bytes) -> tuple[int, str] | dic
             "x-llmxy-client-protocol": client_protocol,
             "x-llmxy-billed-sync": "true",
         }
+        if expected_modality == "chat":
+            out["x-llmxy-chat-chain"] = ",".join(f"{mm.id}:{cc.id}" for mm, cc in pairs)
         if decision.chosen_label:
             out["x-llmxy-resolved-label"] = decision.chosen_label
         if m.kind == "image":
-            pairs = [(m, c)] + (decision.fallback_chain or [])
             out["x-llmxy-image-chain"] = ",".join(f"{mm.id}:{cc.id}" for mm, cc in pairs)
         eu = getattr(decision, "embedding_usage", None)
         if eu is not None:
