@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
+from app.services.providers.openai_compat import normalize_chat_payload_for_model
 
 
 class AzureOpenAIAdapter:
@@ -39,7 +40,7 @@ class AzureOpenAIAdapter:
         return f"{base}/deployments/{deployment}{path}?api-version={ver}"
 
     async def chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
-        body = dict(payload)
+        body = normalize_chat_payload_for_model(payload, upstream_model)
         body.pop("model", None)  # Azure ignores body.model; deployment in URL decides
         body["stream"] = stream
         if stream:

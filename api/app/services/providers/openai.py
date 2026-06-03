@@ -8,6 +8,7 @@ import httpx
 from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
+from app.services.providers.openai_compat import normalize_chat_payload_for_model
 
 
 class OpenAIAdapter:
@@ -32,7 +33,7 @@ class OpenAIAdapter:
         return f"{base}{path}"
 
     async def chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
-        body = dict(payload)
+        body = normalize_chat_payload_for_model(payload, upstream_model)
         body["model"] = upstream_model
         body["stream"] = stream
         if stream:
