@@ -26,9 +26,11 @@ ENV ENVOY_BIN=/usr/local/bin/envoy \
     ENVOY_CONFIG_ROOT=/var/llmxy/envoy \
     ENVOY_LOG_ROOT=/var/llmxy/envoy-logs \
     INTERNAL_API_HOST=127.0.0.1 \
-    INTERNAL_API_PORT=8001 \
-    ALS_GRPC_PORT=8002
+    INTERNAL_API_PORT=8000 \
+    ALS_GRPC_PORT=8002 \
+    XDS_GRPC_PORT=8003 \
+    EXT_PROC_GRPC_PORT=8004
 
-EXPOSE 8000 8001 8002
+EXPOSE 8000 8002 8003 8004
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

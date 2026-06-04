@@ -204,7 +204,6 @@ export default function RoutesPage() {
                       <>
                         <Badge tone={r.scope === "private" ? "warning" : "success"}>{r.scope}</Badge>
                         {r.strategy === "smart" && <ListMeta>default {r.smart_default_label || DEFAULT_LABEL}</ListMeta>}
-                        {r.targets_jsonb.length <= 1 && <ListMeta className="text-amber-600">single target</ListMeta>}
                       </>
                     }
                   />

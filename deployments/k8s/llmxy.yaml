@@ -19,6 +19,7 @@ data:
   REDIS_DB: "0"
   XDS_GRPC_PORT: "8003"
   ALS_GRPC_PORT: "8002"
+  EXT_PROC_GRPC_PORT: "8004"
   API_PUBLIC_URL: "http://api:8000"
   CORS_ORIGINS: "*"
   CONTROL_PLANE_PUBLIC_HOST: "api"
@@ -134,6 +135,7 @@ spec:
             - { name: http,    containerPort: 8000 }
             - { name: als,     containerPort: 8002 }
             - { name: xds,     containerPort: 8003 }
+            - { name: extproc, containerPort: 8004 }
           envFrom:
             - configMapRef: { name: llmxy-config }
             - configMapRef: { name: llmxy-secrets }
@@ -157,6 +159,7 @@ spec:
     - { name: http, port: 8000, targetPort: 8000 }
     - { name: als,  port: 8002, targetPort: 8002 }
     - { name: xds,  port: 8003, targetPort: 8003 }
+    - { name: extproc, port: 8004, targetPort: 8004 }
 ---
 # ---------- Website ----------
 apiVersion: apps/v1
