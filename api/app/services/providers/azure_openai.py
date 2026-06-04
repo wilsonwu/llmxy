@@ -29,7 +29,7 @@ class AzureOpenAIAdapter:
     api-version defaults to settings.AZURE_OPENAI_API_VERSION and can be overridden globally.
     """
 
-    name = "azure"
+    name = "azure_openai"
 
     def __init__(self) -> None:
         self._token_limit_fields: dict[tuple[int | None, str], str] = {}

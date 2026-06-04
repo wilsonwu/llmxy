@@ -130,7 +130,8 @@ class PaymentInitResp(BaseModel):
 # -------- Channels / Models / Routes --------
 class ChannelIn(BaseModel):
     name: str
-    provider_type: str = "openai"  # upstream protocol, e.g. openai / azure / anthropic / gemini
+    provider_type: str = "openai"  # semantic upstream protocol, e.g. openai / anthropic / gemini
+    connector_type: str = "openai"  # upstream connector, e.g. openai / azure_openai / anthropic / gemini
     base_url: str
     api_key_enc: Optional[str] = None
     enabled: bool = True
@@ -149,7 +150,7 @@ class ModelIn(BaseModel):
     channel_id: int
     upstream_model: str
     kind: str = "chat"  # "chat" | "embedding" | "image"
-    upstream_protocol: Optional[str] = None  # per-model upstream protocol override; None = inherit channel provider_type
+    upstream_protocol: Optional[str] = None  # per-model semantic protocol override; None = inherit channel provider_type
     prompt_rate: int = 0  # micro-cent / 1K tokens
     completion_rate: int = 0
     pricing_jsonb: dict = {}  # modality pricing; see Model.pricing_jsonb

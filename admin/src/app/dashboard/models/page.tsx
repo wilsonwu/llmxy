@@ -7,18 +7,24 @@ import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, 
 type Tier = { size: string; quality: string; price_micro: number };
 type Pricing = { mode?: string; tiers?: Tier[]; default_price_micro?: number };
 type M = { id?: number; code: string; display_name: string; channel_id: number; upstream_model: string; kind: string; upstream_protocol?: string | null; prompt_rate: number; completion_rate: number; pricing_jsonb: Pricing; enabled: boolean };
-type C = { id: number; name: string; provider_type: string };
-const CHAT_PROTOCOLS = ["openai", "azure", "anthropic", "gemini"];
+type C = { id: number; name: string; provider_type: string; connector_type: string };
+const CHAT_PROTOCOLS = ["openai", "anthropic", "gemini"];
 // Anthropic has no embeddings API, so it's excluded from embedding models.
-const EMBEDDING_PROTOCOLS = ["openai", "azure", "gemini"];
-const IMAGE_PROTOCOLS = ["openai", "azure", "gemini"];
+const EMBEDDING_PROTOCOLS = ["openai", "gemini"];
+const IMAGE_PROTOCOLS = ["openai", "gemini"];
 const empty: M = { code: "", display_name: "", channel_id: 0, upstream_model: "", kind: "chat", upstream_protocol: null, prompt_rate: 0, completion_rate: 0, pricing_jsonb: {}, enabled: true };
 
 const UPSTREAM_PROTOCOL_META: Record<string, { label: string; hint: string }> = {
-  openai: { label: "OpenAI-compatible", hint: "OpenAI-style /v1 wire format" },
-  azure: { label: "Azure OpenAI", hint: "Azure deployment URL wire format" },
+  openai: { label: "OpenAI", hint: "OpenAI-compatible request/response semantics" },
   anthropic: { label: "Anthropic", hint: "Claude Messages API wire format" },
   gemini: { label: "Google Gemini", hint: "Gemini REST wire format" },
+};
+
+const CONNECTOR_META: Record<string, { label: string; hint: string }> = {
+  openai: { label: "OpenAI-compatible", hint: "Bearer auth with /v1 paths" },
+  azure_openai: { label: "Azure OpenAI", hint: "Azure deployment path with api-key and api-version" },
+  anthropic: { label: "Anthropic", hint: "Anthropic API endpoint connector" },
+  gemini: { label: "Google Gemini", hint: "Gemini REST connector" },
 };
 
 function protocolLabel(protocol: string) {
@@ -29,19 +35,45 @@ function protocolHint(protocol: string) {
   return UPSTREAM_PROTOCOL_META[protocol]?.hint || "Custom upstream adapter";
 }
 
+function connectorLabel(connector: string) {
+  return CONNECTOR_META[connector]?.label || connector || "unknown";
+}
+
 function protocolTone(protocol: string) {
-  return protocol === "anthropic" ? "purple" : protocol === "gemini" ? "warning" : protocol === "azure" ? "brand" : protocol === "openai" ? "success" : "neutral";
+  return protocol === "anthropic" ? "purple" : protocol === "gemini" ? "warning" : protocol === "openai" ? "success" : "neutral";
 }
 
 // A representative upstream request for each (protocol, kind), mirroring the
 // adapters in api/app/services/providers. Lets admins eyeball whether the
 // selected protocol produces the wire format they expect. `m` is the upstream
 // model name (Azure treats it as the deployment name).
-function upstreamSample(protocol: string, kind: string, m: string): string | null {
+function upstreamSample(protocol: string, connector: string, kind: string, m: string): string | null {
   const model = m || "<upstream_model>";
   const apiVer = "2024-10-21";
   const imgVer = "2025-04-01-preview";
   if (protocol === "openai") {
+    if (connector === "azure_openai") {
+      if (kind === "embedding")
+        return [
+          `POST {base_url}/openai/deployments/${model}/embeddings?api-version=${apiVer}`,
+          "api-key: <api-key>",
+          "",
+          JSON.stringify({ input: "Hello world" }, null, 2),
+        ].join("\n");
+      if (kind === "image")
+        return [
+          `POST {base_url}/openai/deployments/${model}/images/generations?api-version=${imgVer}`,
+          "api-key: <api-key>",
+          "",
+          JSON.stringify({ prompt: "a red panda coding", n: 1, size: "1024x1024" }, null, 2),
+        ].join("\n");
+      return [
+        `POST {base_url}/openai/deployments/${model}/chat/completions?api-version=${apiVer}`,
+        "api-key: <api-key>",
+        "",
+        JSON.stringify({ messages: [{ role: "user", content: "Hello" }], max_tokens: 1024, stream: false }, null, 2),
+      ].join("\n");
+    }
     if (kind === "embedding")
       return [
         "POST {base_url}/v1/embeddings",
@@ -61,29 +93,6 @@ function upstreamSample(protocol: string, kind: string, m: string): string | nul
       "Authorization: Bearer <api-key>",
       "",
       JSON.stringify({ model, messages: [{ role: "user", content: "Hello" }], max_tokens: 1024, stream: false }, null, 2),
-    ].join("\n");
-  }
-  if (protocol === "azure") {
-    // Azure puts the deployment in the URL and strips body.model; auth is api-key.
-    if (kind === "embedding")
-      return [
-        `POST {base_url}/openai/deployments/${model}/embeddings?api-version=${apiVer}`,
-        "api-key: <api-key>",
-        "",
-        JSON.stringify({ input: "Hello world" }, null, 2),
-      ].join("\n");
-    if (kind === "image")
-      return [
-        `POST {base_url}/openai/deployments/${model}/images/generations?api-version=${imgVer}`,
-        "api-key: <api-key>",
-        "",
-        JSON.stringify({ prompt: "a red panda coding", n: 1, size: "1024x1024" }, null, 2),
-      ].join("\n");
-    return [
-      `POST {base_url}/openai/deployments/${model}/chat/completions?api-version=${apiVer}`,
-      "api-key: <api-key>",
-      "",
-      JSON.stringify({ messages: [{ role: "user", content: "Hello" }], max_tokens: 1024, stream: false }, null, 2),
     ].join("\n");
   }
   if (protocol === "anthropic") {
@@ -180,6 +189,7 @@ export default function ModelsPage() {
   }
   const chName = (id: number) => channels?.find((c) => c.id === id)?.name || `#${id}`;
   const chProtocol = (id: number) => (channels?.find((c) => c.id === id)?.provider_type || "openai").toLowerCase();
+  const chConnector = (id: number) => (channels?.find((c) => c.id === id)?.connector_type || "openai").toLowerCase();
   const effectiveProtocol = (m: Pick<M, "upstream_protocol" | "channel_id">) => (m.upstream_protocol || chProtocol(m.channel_id)).toLowerCase();
   const isProtocolSupportedForKind = (protocol: string, kind: string) => {
     const allowed = kind === "image" ? IMAGE_PROTOCOLS : kind === "embedding" ? EMBEDDING_PROTOCOLS : CHAT_PROTOCOLS;
@@ -212,7 +222,7 @@ export default function ModelsPage() {
                 <td>
                   <ListCell
                     primary={<code className="break-all font-mono text-xs">{m.upstream_model}</code>}
-                    secondary={<><ListMeta>{chName(m.channel_id)}</ListMeta><ListMeta>channel #{m.channel_id}</ListMeta></>}
+                    secondary={<><ListMeta>{chName(m.channel_id)}</ListMeta><ListMeta>{connectorLabel(chConnector(m.channel_id))}</ListMeta></>}
                   />
                 </td>
                 <td>
@@ -270,7 +280,7 @@ export default function ModelsPage() {
             <div className="grid grid-cols-2 gap-3">
               <div><label className="label">channel</label>
                 <select className="input w-full" value={editing.channel_id} onChange={(e) => setEditing({ ...editing, channel_id: +e.target.value })}>
-                  {channels?.map((c) => <option key={c.id} value={c.id}>{c.name} - {protocolLabel(c.provider_type)}</option>)}
+                  {channels?.map((c) => <option key={c.id} value={c.id}>{c.name} - {protocolLabel(c.provider_type)} via {connectorLabel(c.connector_type)}</option>)}
                 </select></div>
               <div><label className="label">upstream_model</label>
                 <input className="input w-full" value={editing.upstream_model} onChange={(e) => setEditing({ ...editing, upstream_model: e.target.value })} /></div>
@@ -297,6 +307,7 @@ export default function ModelsPage() {
               return (
                 <p className={`text-xs ${supported ? "text-gray-500" : "text-amber-700"}`}>
                   Effective upstream protocol: <b>{protocolLabel(protocol)}</b>{inherited ? ` inherited from channel ${chName(editing.channel_id)}` : " from this model override"}. {protocolHint(protocol)}.
+                  {" "}Connection type: <b>{connectorLabel(chConnector(editing.channel_id))}</b>.
                   {!supported && ` ${protocolLabel(protocol)} does not support ${editing.kind}; choose another channel protocol or set a model override.`}
                 </p>
               );
@@ -306,14 +317,14 @@ export default function ModelsPage() {
             <div className="rounded border border-gray-200">
               <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50"
                 onClick={() => setShowSample((s) => !s)}>
-                <span>Upstream request preview ({protocolLabel(effectiveProtocol(editing))}{editing.upstream_protocol ? " override" : " inherited"})</span>
+                <span>Upstream request preview ({protocolLabel(effectiveProtocol(editing))} via {connectorLabel(chConnector(editing.channel_id))})</span>
                 <span>{showSample ? "▾" : "▸"}</span>
               </button>
               {showSample && (
                 <div className="px-3 pb-3">
                   {(() => {
                     const protocol = effectiveProtocol(editing);
-                    const sample = upstreamSample(protocol, editing.kind, editing.upstream_model);
+                    const sample = upstreamSample(protocol, chConnector(editing.channel_id), editing.kind, editing.upstream_model);
                     return sample ? (
                       <pre className="text-[11px] leading-relaxed bg-gray-900 text-gray-100 rounded p-3 overflow-x-auto whitespace-pre-wrap break-all">{sample}</pre>
                     ) : (

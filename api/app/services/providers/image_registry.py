@@ -1,11 +1,8 @@
 """Image-generation protocol registry.
 
-Image generation APIs vary far more than chat: OpenAI / Azure expose
-`/images/generations`, Gemini uses Imagen `predict`, and third parties
-(Stability, Flux, Replicate, ...) each have their own request/response shape.
-So the *protocol* used to talk to an upstream image model is NOT necessarily
-the same as the channel's chat `provider_type` — it is selected per image
-model via `Model.upstream_protocol`.
+Image generation APIs vary far more than chat: OpenAI-compatible endpoints and
+Azure OpenAI share the OpenAI semantic protocol, but use different URL/auth
+connectors; Gemini uses a different semantic protocol and connector.
 
 Each registered adapter exposes `images(channel, upstream_model, payload)` and
 is responsible for translating the incoming OpenAI-shape payload to the
@@ -30,18 +27,21 @@ class ImageAdapter(Protocol):
         ...
 
 
-# Keyed by protocol name, intentionally independent of the chat provider
-# registry. Adding a new protocol (e.g. "stability", "flux") only requires a
-# new adapter implementing `images()` plus one entry here.
+# Keyed by connector name. Adding a new connector (e.g. OpenAI-compatible via a
+# third-party gateway, Bedrock Anthropic, Stability, Flux) only requires a new
+# adapter implementing `images()` plus one entry here.
 _IMAGE_REGISTRY: dict[str, ImageAdapter] = {
-    "openai": OpenAIAdapter(),      # OpenAI /v1/images/generations (dall-e, gpt-image)
-    "azure": AzureOpenAIAdapter(),  # Azure OpenAI images (image preview api-version)
-    "gemini": GeminiAdapter(),      # Imagen predict (translation pending)
+    "openai": OpenAIAdapter(),        # OpenAI /v1/images/generations (dall-e, gpt-image)
+    "azure_openai": AzureOpenAIAdapter(),  # Azure OpenAI images (image preview api-version)
+    "gemini": GeminiAdapter(),        # Imagen predict (translation pending)
 }
 
 
 def get_image_adapter(protocol: str) -> ImageAdapter | None:
-    return _IMAGE_REGISTRY.get((protocol or "").lower())
+    from app.services.providers.registry import normalize_connector
+
+    return _IMAGE_REGISTRY.get(normalize_connector(protocol))
 
 
-SUPPORTED_IMAGE_PROTOCOLS = list(_IMAGE_REGISTRY.keys())
+SUPPORTED_IMAGE_CONNECTORS = list(_IMAGE_REGISTRY.keys())
+SUPPORTED_IMAGE_PROTOCOLS = ["openai", "gemini"]

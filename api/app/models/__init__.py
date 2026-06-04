@@ -188,11 +188,15 @@ class Order(Base):
 
 
 class Channel(Base):
-    """Upstream channel — one row per provider account (openai/anthropic/gemini)."""
+    """Upstream channel — one row per provider account/endpoint."""
     __tablename__ = "channels"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
+    # Semantic upstream request/response protocol: openai / anthropic / gemini.
     provider_type: Mapped[str] = mapped_column(String(32), default="openai")
+    # Connection implementation: URL template, auth headers, API versions, etc.
+    # Examples: openai, azure_openai, anthropic, gemini.
+    connector_type: Mapped[str] = mapped_column(String(64), default="openai", server_default="openai", nullable=False)
     base_url: Mapped[str] = mapped_column(String(512))
     api_key_enc: Mapped[Optional[str]] = mapped_column(String(512))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -210,11 +214,9 @@ class Model(Base):
     # "chat" (default) | "embedding" | "image". Smart-routing exemplar
     # embeddings use kind=embedding. Image models bill via pricing_jsonb.
     kind: Mapped[str] = mapped_column(String(16), default="chat", nullable=False)
-    # Per-model upstream wire-protocol override; selects the translation
-    # adapter (openai/azure/anthropic/gemini for chat; openai/azure/gemini for
-    # image). NULL falls back to the channel's provider_type, so one channel
-    # can host models of different protocols (e.g. Azure AI Foundry serves both
-    # azure-openai gpt-* and openai-compatible Llama/DeepSeek deployments).
+    # Per-model upstream semantic protocol override. NULL falls back to the
+    # channel's provider_type. The channel connector still controls URL/auth
+    # details and must support the effective protocol.
     upstream_protocol: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     # rate per 1K tokens, stored as 1/10000 cents for precision (i.e. micro-cents).
     # cost_cents = ceil((prompt*pr + completion*cr) / 10000 / 1000)

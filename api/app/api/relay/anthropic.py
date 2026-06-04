@@ -82,10 +82,14 @@ async def messages(
         async def streamer() -> AsyncIterator[bytes]:
             last_err: str | None = None
             for m, c in candidates:
-                protocol = providers.resolve_adapter_protocol(m, c)
-                adapter = providers.get_adapter(protocol)
+                connector = providers.resolve_connector_type(m, c)
+                protocol = providers.resolve_upstream_protocol(m, c)
+                adapter = providers.get_connector_adapter(connector)
                 if not adapter:
-                    last_err = f"no adapter for {protocol}"
+                    last_err = f"no connector adapter for {connector}"
+                    continue
+                if not providers.connector_supports_protocol(connector, protocol):
+                    last_err = f"connector {connector} does not support protocol {protocol}"
                     continue
                 try:
                     result = await adapter.chat(c, m.upstream_model, openai_payload, stream=True)
@@ -128,10 +132,14 @@ async def messages(
 
     last_err = None
     for m, c in candidates:
-        protocol = providers.resolve_adapter_protocol(m, c)
-        adapter = providers.get_adapter(protocol)
+        connector = providers.resolve_connector_type(m, c)
+        protocol = providers.resolve_upstream_protocol(m, c)
+        adapter = providers.get_connector_adapter(connector)
         if not adapter:
-            last_err = f"no adapter for {protocol}"
+            last_err = f"no connector adapter for {connector}"
+            continue
+        if not providers.connector_supports_protocol(connector, protocol):
+            last_err = f"connector {connector} does not support protocol {protocol}"
             continue
         try:
             result = await adapter.chat(c, m.upstream_model, openai_payload, stream=False)

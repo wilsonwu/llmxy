@@ -76,13 +76,16 @@ async def execute_image_relay(
     last_status, last_body = 502, {"error": {"message": "no upstream"}}
 
     for model, channel in candidates:
-        # The image wire protocol is chosen per-model (upstream_protocol), NOT
-        # by the channel's chat provider_type — image APIs vary too much to
-        # share one implicit protocol. Fall back to provider_type when unset.
-        protocol = providers.resolve_adapter_protocol(model, channel)
-        adapter = providers.get_image_adapter(protocol)
+        # Image semantics are chosen per model/channel protocol; URL/auth/API
+        # version details are chosen by the channel connector.
+        protocol = providers.resolve_upstream_protocol(model, channel)
+        connector = providers.resolve_connector_type(model, channel)
+        adapter = providers.get_image_adapter(connector)
         if not adapter:
-            last_status, last_body = 502, {"error": {"message": f"no image adapter for protocol {protocol}"}}
+            last_status, last_body = 502, {"error": {"message": f"no image adapter for connector {connector}"}}
+            continue
+        if not providers.connector_supports_protocol(connector, protocol):
+            last_status, last_body = 502, {"error": {"message": f"connector {connector} does not support protocol {protocol}"}}
             continue
 
         estimate, meta = quote_image_cost_cents(

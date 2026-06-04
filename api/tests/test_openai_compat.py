@@ -5,9 +5,47 @@ from app.services.providers.openai_compat import (
     should_retry_with_max_tokens,
     should_retry_with_max_completion_tokens,
 )
+from app.services.providers.registry import (
+    SUPPORTED_CHAT_PROTOCOLS,
+    SUPPORTED_CONNECTORS,
+    channel_connector,
+    channel_protocol,
+    connector_supports_protocol,
+    get_connector_adapter,
+    resolve_connector_type,
+    resolve_upstream_protocol,
+)
 from app.services.providers.anthropic import _to_anthropic
 from app.services.providers.gemini import _to_gemini
 from app.services.protocols.chat import anthropic_messages_request_error, anthropic_to_openai_payload
+from types import SimpleNamespace
+
+
+def test_openai_semantic_protocol_has_multiple_connectors():
+    assert SUPPORTED_CHAT_PROTOCOLS == ["openai", "anthropic", "gemini"]
+    assert "azure" not in SUPPORTED_CHAT_PROTOCOLS
+    assert {"openai", "azure_openai"}.issubset(set(SUPPORTED_CONNECTORS))
+    assert connector_supports_protocol("openai", "openai") is True
+    assert connector_supports_protocol("azure_openai", "openai") is True
+    assert get_connector_adapter("openai") is not None
+    assert get_connector_adapter("azure_openai") is not None
+
+
+def test_channel_protocol_and_connector_are_resolved_separately():
+    channel = SimpleNamespace(provider_type="openai", connector_type="azure_openai")
+    model = SimpleNamespace(upstream_protocol=None)
+
+    assert channel_protocol(channel) == "openai"
+    assert channel_connector(channel) == "azure_openai"
+    assert resolve_upstream_protocol(model, channel) == "openai"
+    assert resolve_connector_type(model, channel) == "azure_openai"
+
+
+def test_legacy_azure_provider_type_maps_to_openai_protocol_and_azure_connector():
+    channel = SimpleNamespace(provider_type="azure", connector_type="openai")
+
+    assert channel_protocol(channel) == "openai"
+    assert channel_connector(channel) == "azure_openai"
 
 
 def test_force_max_completion_tokens_converts_max_tokens():

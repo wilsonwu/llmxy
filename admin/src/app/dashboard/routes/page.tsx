@@ -32,7 +32,7 @@ type R = {
   exposed_protocols?: ExposedProtocol[];
 };
 type M = { id: number; code: string; display_name: string; channel_id: number; upstream_model: string; kind?: string; upstream_protocol?: string | null; enabled?: boolean };
-type C = { id: number; name: string; provider_type: string; enabled?: boolean };
+type C = { id: number; name: string; provider_type: string; connector_type: string; enabled?: boolean };
 
 const empty: R = {
   user_facing_model: "",
@@ -124,8 +124,9 @@ export default function RoutesPage() {
   const channelById = (id: number) => channels?.find((c) => c.id === id);
   const modelLabel = (id: number) => modelById(id)?.code || `#${id}`;
   const modalityTone = (m: string) => m === "image" ? "purple" : m === "embedding" ? "brand" : "info";
-  const protocolTone = (p: string) => p === "anthropic" ? "purple" : p === "gemini" ? "warning" : p === "azure" ? "brand" : p === "openai" ? "success" : "neutral";
+  const protocolTone = (p: string) => p === "anthropic" ? "purple" : p === "gemini" ? "warning" : p === "openai" ? "success" : "neutral";
   const protocolLabel = (p: string) => p;
+  const connectorLabel = (c: string) => c === "azure_openai" ? "azure openai" : c === "openai" ? "openai-compatible" : c;
   function routeProtocols(r: R): ExposedProtocol[] {
     const raw = r.exposed_protocols?.length ? r.exposed_protocols : ["openai"];
     const normalized = Array.from(new Set(raw.filter((p): p is ExposedProtocol => p === "openai" || p === "anthropic")));
@@ -135,23 +136,29 @@ export default function RoutesPage() {
     if (!m) return "unknown";
     return (m.upstream_protocol || channelById(m.channel_id)?.provider_type || "channel default").toLowerCase();
   };
+  const effectiveConnector = (m?: M) => {
+    if (!m) return "unknown";
+    return (channelById(m.channel_id)?.connector_type || "openai").toLowerCase();
+  };
   const modelOptionLabel = (m: M) => {
     const disabled = m.enabled === false ? " · disabled" : "";
-    return `${m.code} — ${m.display_name} · upstream ${protocolLabel(effectiveProtocol(m))} · ${m.upstream_model}${disabled}`;
+    return `${m.code} — ${m.display_name} · upstream ${protocolLabel(effectiveProtocol(m))} via ${connectorLabel(effectiveConnector(m))} · ${m.upstream_model}${disabled}`;
   };
 
   const renderTargetSummary = (r: R) =>
     r.targets_jsonb.map((t, i) => {
       const model = modelById(t.model_id);
       const protocol = effectiveProtocol(model);
+      const connector = effectiveConnector(model);
       const extras: string[] = [];
       if (r.strategy === "weighted") extras.push(`w${t.weight}`);
       if (r.strategy === "fallback") extras.push(`o${t.fallback_order}`);
       if (r.strategy === "smart") extras.push(t.label ? `[${t.label}]` : "[no-label]");
       return (
-        <span key={i} className="mr-2 inline-flex items-center gap-1" title={model ? `Auto upstream adapter: ${protocol}; model: ${model.upstream_model}` : undefined}>
+        <span key={i} className="mr-2 inline-flex items-center gap-1" title={model ? `Upstream protocol: ${protocol}; connector: ${connector}; model: ${model.upstream_model}` : undefined}>
           <span>{modelLabel(t.model_id)}({extras.join("/")})</span>
           <Badge tone={protocolTone(protocol)}>{protocolLabel(protocol)}</Badge>
+          <Badge tone="neutral">{connectorLabel(connector)}</Badge>
         </span>
       );
     });
@@ -392,7 +399,7 @@ export default function RoutesPage() {
                 <option value="image">image</option>
               </select>
               <p className="mt-1 text-xs text-gray-500">
-                This only chooses the public API shape clients call. It does not force an upstream protocol: each target model automatically uses its own adapter, such as anthropic for Claude, gemini for Gemini, azure for Azure, or openai for compatible providers. Switching API type clears the current targets.
+                This only chooses the public API shape clients call. Target models choose the upstream semantic protocol; their channels choose the connector, such as OpenAI-compatible or Azure OpenAI. Switching API type clears the current targets.
               </p>
             </div>
 

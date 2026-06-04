@@ -262,7 +262,8 @@ async def _decide(headers: dict[str, str], body: bytes) -> tuple[int, str] | dic
 
         m, c = decision.model, decision.channel
         pairs = [(m, c)] + (decision.fallback_chain or [])
-        eff_protocol = providers.resolve_adapter_protocol(m, c)
+        eff_protocol = providers.resolve_upstream_protocol(m, c)
+        connector = providers.resolve_connector_type(m, c)
         out = {
             "x-llmxy-cluster": "translator",
             "x-llmxy-request-id": request_id,
@@ -272,6 +273,7 @@ async def _decide(headers: dict[str, str], body: bytes) -> tuple[int, str] | dic
             "x-llmxy-user-facing-model": model_name,
             "x-llmxy-upstream-model": m.upstream_model,
             "x-llmxy-provider-type": (c.provider_type or "").lower(),
+            "x-llmxy-connector-type": connector,
             "x-llmxy-upstream-protocol": eff_protocol,
             "x-llmxy-channel-id": str(c.id),
             "x-llmxy-client-protocol": client_protocol,

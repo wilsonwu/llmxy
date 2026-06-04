@@ -113,6 +113,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer, primary_key=True),
         sa.Column("name", sa.String(128)),
         sa.Column("provider_type", sa.String(32), server_default="openai"),
+        sa.Column("connector_type", sa.String(64), nullable=False, server_default="openai"),
         sa.Column("base_url", sa.String(512)),
         sa.Column("api_key_enc", sa.String(512)),
         sa.Column("enabled", sa.Boolean, server_default=sa.true()),

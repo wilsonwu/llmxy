@@ -202,6 +202,7 @@ async def chat_completions(
     x_llmxy_user_facing_model: str | None = Header(None),
     x_llmxy_upstream_model: str | None = Header(None),
     x_llmxy_upstream_protocol: str | None = Header(None),
+    x_llmxy_connector_type: str | None = Header(None),
     x_llmxy_chat_chain: str | None = Header(None),
     x_llmxy_request_id: str | None = Header(None),
     x_llmxy_resolved_label: str | None = Header(None),
@@ -242,10 +243,14 @@ async def chat_completions(
         last_err: object = None
         for candidate_model, channel, upstream_model in candidates:
             requested_protocol = x_llmxy_upstream_protocol if candidate_model is None else None
-            protocol = providers.resolve_adapter_protocol(candidate_model, channel, requested_protocol)
-            adapter = providers.get_adapter(protocol)
+            protocol = providers.resolve_upstream_protocol(candidate_model, channel, requested_protocol)
+            connector = providers.resolve_connector_type(candidate_model, channel, x_llmxy_connector_type if candidate_model is None else None)
+            adapter = providers.get_connector_adapter(connector)
             if not adapter:
-                last_err = f"no adapter for {protocol}"
+                last_err = f"no connector adapter for {connector}"
+                continue
+            if not providers.connector_supports_protocol(connector, protocol):
+                last_err = f"connector {connector} does not support protocol {protocol}"
                 continue
             try:
                 result = await adapter.chat(channel, upstream_model, payload, stream=stream)
@@ -316,6 +321,7 @@ async def messages(
     x_llmxy_user_facing_model: str | None = Header(None),
     x_llmxy_upstream_model: str | None = Header(None),
     x_llmxy_upstream_protocol: str | None = Header(None),
+    x_llmxy_connector_type: str | None = Header(None),
     x_llmxy_chat_chain: str | None = Header(None),
     x_llmxy_request_id: str | None = Header(None),
     x_llmxy_resolved_label: str | None = Header(None),
@@ -360,10 +366,14 @@ async def messages(
         last_err: object = None
         for candidate_model, channel, upstream_model in candidates:
             requested_protocol = x_llmxy_upstream_protocol if candidate_model is None else None
-            protocol = providers.resolve_adapter_protocol(candidate_model, channel, requested_protocol)
-            adapter = providers.get_adapter(protocol)
+            protocol = providers.resolve_upstream_protocol(candidate_model, channel, requested_protocol)
+            connector = providers.resolve_connector_type(candidate_model, channel, x_llmxy_connector_type if candidate_model is None else None)
+            adapter = providers.get_connector_adapter(connector)
             if not adapter:
-                last_err = f"no adapter for {protocol}"
+                last_err = f"no connector adapter for {connector}"
+                continue
+            if not providers.connector_supports_protocol(connector, protocol):
+                last_err = f"connector {connector} does not support protocol {protocol}"
                 continue
             try:
                 result = await adapter.chat(channel, upstream_model, openai_payload, stream=stream)
@@ -433,14 +443,18 @@ async def embeddings(
     x_llmxy_channel_id: str | None = Header(None),
     x_llmxy_upstream_model: str | None = Header(None),
     x_llmxy_upstream_protocol: str | None = Header(None),
+    x_llmxy_connector_type: str | None = Header(None),
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = providers.resolve_adapter_protocol(None, channel, x_llmxy_upstream_protocol)
-        adapter = providers.get_adapter(protocol)
+        protocol = providers.resolve_upstream_protocol(None, channel, x_llmxy_upstream_protocol)
+        connector = providers.resolve_connector_type(None, channel, x_llmxy_connector_type)
+        adapter = providers.get_connector_adapter(connector)
         if not adapter:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no adapter for {protocol}")
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no connector adapter for {connector}")
+        if not providers.connector_supports_protocol(connector, protocol):
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"connector {connector} does not support protocol {protocol}")
         if not x_llmxy_upstream_model:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing x-llmxy-upstream-model")
         try:

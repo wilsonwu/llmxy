@@ -44,6 +44,7 @@ async def seed() -> None:
             ch = Channel(
                 name="default-openai",
                 provider_type="openai",
+                connector_type="openai",
                 base_url="https://api.openai.com/v1",
                 api_key_enc=None,  # admin must set the real key
                 enabled=True,

@@ -60,8 +60,11 @@ def _exemplar_cache_key(policy_id: int, version: int) -> str:
 def _adapter_for_model(model: Model, channel: Channel):
     from app.services import providers as _p
 
-    protocol = _p.resolve_adapter_protocol(model, channel)
-    return protocol, _p.get_adapter(protocol)
+    connector = _p.resolve_connector_type(model, channel)
+    protocol = _p.resolve_upstream_protocol(model, channel)
+    if not _p.connector_supports_protocol(connector, protocol):
+        return f"{connector}/{protocol}", None
+    return connector, _p.get_connector_adapter(connector)
 
 
 async def _embed_one(
@@ -70,7 +73,7 @@ async def _embed_one(
     """Returns (vector_or_None, prompt_tokens, status)."""
     protocol, adapter = _adapter_for_model(model, channel)
     if not adapter:
-        return None, 0, f"no adapter for {protocol}"
+        return None, 0, f"no connector adapter for {protocol}"
     try:
         status, body = await adapter.embeddings(
             channel, model.upstream_model,

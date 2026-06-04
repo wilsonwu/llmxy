@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import Channel, EnvoyInstance
+from app.services.providers import channel_connector
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def _is_direct(channel: Channel) -> bool:
     decision policy can opt into direct OpenAI-compatible egress without a
     bootstrap/config shape change.
     """
-    return (channel.provider_type or "").lower() == "openai"
+    return channel_connector(channel) == "openai"
 
 
 def _grpc_cluster(name: str, host: str, port: int) -> dict[str, Any]:

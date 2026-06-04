@@ -14,7 +14,7 @@ flowchart LR
     API <--> PG
     API <--> R
   end
-  API -->|OpenAI protocol| OAI[OpenAI / DeepSeek / Moonshot / ...]
+  API -->|OpenAI protocol + connector| OAI[OpenAI / Azure OpenAI / compatible gateways]
   API -->|Messages API| ANT[Anthropic Claude]
   API -->|generateContent| GEM[Google Gemini]
 ```
@@ -34,17 +34,23 @@ flowchart LR
 
 `api/app/services/providers/`:
 
-| Module | Upstream protocol | Use cases |
-|---|---|---|
-| `openai.py`    | `POST /v1/chat/completions`             | OpenAI itself, and any OpenAI-compatible service (DeepSeek, Moonshot, Qwen-compat mode, OneAPI, self-hosted vLLM, etc.) |
-| `anthropic.py` | `POST /v1/messages` + `x-api-key` header | Claude 3 / 3.5 / 4 |
-| `gemini.py`    | `POST /v1beta/models/{m}:generateContent?key=` | Gemini 1.5 / 2.x |
+Upstream configuration is split into two concepts:
+
+- `provider_type`: semantic request/response protocol, currently `openai`, `anthropic`, or `gemini`.
+- `connector_type`: connection implementation, such as URL templates, authentication headers, path layout, and API versions. Current connectors are `openai`, `azure_openai`, `anthropic`, and `gemini`.
+
+| Module | Connector | Semantic protocol | Use cases |
+|---|---|---|---|
+| `openai.py` | `openai` | `openai` | OpenAI itself, and any OpenAI-compatible service (DeepSeek, Moonshot, Qwen-compat mode, OneAPI, self-hosted vLLM, etc.) |
+| `azure_openai.py` | `azure_openai` | `openai` | Azure OpenAI deployment paths, `api-key` auth, and `api-version` handling |
+| `anthropic.py` | `anthropic` | `anthropic` | Claude Messages API |
+| `gemini.py` | `gemini` | `gemini` | Gemini generateContent / embedding APIs |
 
 Each adapter implements:
 - `chat(channel, upstream_model, payload, stream)` → returns `ChatResult{status, body, stream, prompt_tokens, completion_tokens}`. In stream mode the SSE output is always in **OpenAI chat.completion.chunk format** so the OpenAI SDK can consume it directly.
 - `embeddings(channel, upstream_model, payload)` → implemented for OpenAI / Gemini; Anthropic returns 501.
 
-`registry.py` picks an adapter by `channel.provider_type`.
+`registry.py` resolves the semantic protocol from `Model.upstream_protocol` or `Channel.provider_type`, then picks the adapter from `Channel.connector_type`.
 `router.py` implements `select_route(policy, models, channels)`; weighted / fallback order determines the primary + fallback chain.
 
 ## Database tables
@@ -54,7 +60,7 @@ Each adapter implements:
 | users | Users and admins, including balance |
 | api_keys | User `sk-` keys (hashed) |
 | plans / subscriptions / orders | Plans and orders |
-| channels | Upstream accounts (`provider_type` ∈ {openai, anthropic, gemini}) |
+| channels | Upstream accounts (`provider_type` ∈ {openai, anthropic, gemini}, `connector_type` ∈ {openai, azure_openai, anthropic, gemini}) |
 | models | Sellable models + rates (`channel_id`, `upstream_model`, `prompt_rate`, `completion_rate`) |
 | route_policies | Routing policy mapping public model → real model |
 | usage_logs | Per-request usage log |

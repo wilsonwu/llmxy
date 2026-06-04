@@ -13,28 +13,27 @@ from app.services.providers import (
     SUPPORTED_CHAT_PROTOCOLS,
     SUPPORTED_EMBEDDING_PROTOCOLS,
     SUPPORTED_IMAGE_PROTOCOLS,
-    adapter_family,
-    channel_locks_adapter,
+    channel_connector,
+    channel_protocol,
+    connector_supports_kind,
+    connector_supports_protocol,
+    normalize_protocol,
 )
 
 router = APIRouter(prefix="/models", tags=["admin-models"])
 
 async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
     """Validate the optional per-model upstream protocol override against the
-    protocols supported for the model's modality. Empty = inherit the channel's
-    provider_type; that inherited effective protocol is validated too."""
+    semantic protocols supported for the model's modality. Empty = inherit the
+    channel's semantic provider_type; the channel connector must support the
+    effective protocol and modality."""
     channel = await db.get(Channel, req.channel_id)
     if not channel:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"channel {req.channel_id} not found")
-    channel_protocol = (channel.provider_type or "").lower()
-    override = (req.upstream_protocol or "").lower()
-    if override and channel_locks_adapter(channel_protocol) and adapter_family(override) != adapter_family(channel_protocol):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"model upstream_protocol {override!r} cannot override provider-specific channel protocol {channel_protocol!r}; "
-            "clear the override to inherit the channel protocol or choose a protocol in the same family",
-        )
-    proto = override or channel_protocol
+    inherited_protocol = channel_protocol(channel)
+    connector = channel_connector(channel)
+    override = normalize_protocol(req.upstream_protocol) if req.upstream_protocol else ""
+    proto = override or inherited_protocol
     if req.kind == "image":
         allowed = SUPPORTED_IMAGE_PROTOCOLS
     elif req.kind == "embedding":
@@ -47,6 +46,11 @@ async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"unsupported upstream protocol {proto!r} ({source}) for kind {req.kind!r}; "
             f"supported: {', '.join(allowed)}",
+        )
+    if not connector_supports_protocol(connector, proto) or not connector_supports_kind(connector, req.kind):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"channel connector {connector!r} does not support {req.kind!r} models using semantic protocol {proto!r}",
         )
 
 
