@@ -3,7 +3,7 @@ import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
 import { COUNTRIES, COUNTRY_NAME } from "@/lib/countries";
-import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
+import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type Target = { model_id: number; weight: number; fallback_order: number; label?: string | null };
 type Rule =
@@ -177,45 +177,60 @@ export default function RoutesPage() {
       <div className="card overflow-x-auto p-0">
         <table className="table">
           <thead>
-            <tr><th>ID</th><th>Public model</th><th>Strategy</th><th>Scope</th><th>targets</th><th>Enabled</th><th></th></tr>
+            <tr><th>Route</th><th>Policy</th><th>Targets</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
-            {isLoading && <TableSkeleton cols={7} />}
+            {isLoading && <TableSkeleton cols={5} />}
             {!isLoading && filtered.map((r) => (
               <tr key={r.id}>
-                <td>{r.id}</td>
                 <td>
-                  <span className="mr-1">{r.user_facing_model}</span>
-                  <Badge tone={modalityTone(r.modality || "chat")}>{r.modality || "chat"}</Badge>
-                  {routeProtocols(r).map((p) => <Badge key={p} tone={protocolTone(p)}>{p}</Badge>)}
+                  <ListCell
+                    primary={<span>{r.user_facing_model}</span>}
+                    secondary={<><ListMeta>#{r.id}</ListMeta><Badge tone={modalityTone(r.modality || "chat")}>{r.modality || "chat"}</Badge>{routeProtocols(r).map((p) => <Badge key={p} tone={protocolTone(p)}>{p}</Badge>)}</>}
+                  />
                 </td>
                 <td>
-                  {r.strategy}
-                  {r.targets_jsonb.length <= 1 && (
-                    <span title="Only one target — strategy has no effect" className="ml-1 text-xs text-amber-600">(single target)</span>
-                  )}
+                  <ListCell
+                    primary={<span>{r.strategy}</span>}
+                    secondary={
+                      <>
+                        <Badge tone={r.scope === "private" ? "warning" : "success"}>{r.scope}</Badge>
+                        {r.strategy === "smart" && <ListMeta>default {r.smart_default_label || DEFAULT_LABEL}</ListMeta>}
+                        {r.targets_jsonb.length <= 1 && <ListMeta className="text-amber-600">single target</ListMeta>}
+                      </>
+                    }
+                  />
                 </td>
                 <td>
-                  <Badge tone={r.scope === "private" ? "warning" : "success"}>{r.scope}</Badge>
+                  <ListCell
+                    primary={<span>{r.targets_jsonb.length} target{r.targets_jsonb.length === 1 ? "" : "s"}</span>}
+                    secondary={renderTargetSummary(r)}
+                  />
                 </td>
-                <td className="text-xs">{renderTargetSummary(r)}</td>
-                <td>{r.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
-                <td className="space-x-2 whitespace-nowrap">
-                  <button className="btn-outline" onClick={() => setEditing({
-                    ...r,
-                    targets_jsonb: [...r.targets_jsonb],
-                    smart_rules_jsonb: [...(r.smart_rules_jsonb || [])],
-                    smart_exemplars_jsonb: [...(r.smart_exemplars_jsonb || [])],
-                    smart_score_threshold: r.smart_score_threshold ?? 55,
-                    modality: r.modality || "chat",
-                    exposed_protocols: routeProtocols(r),
-                  })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(r.id!, r.user_facing_model)}>Delete</button>
+                <td>
+                  <ListCell
+                    primary={r.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
+                    secondary={r.enabled ? "served to clients" : "not routable"}
+                  />
+                </td>
+                <td>
+                  <ListActions>
+                    <IconButton label={`Edit ${r.user_facing_model}`} icon="edit" onClick={() => setEditing({
+                      ...r,
+                      targets_jsonb: [...r.targets_jsonb],
+                      smart_rules_jsonb: [...(r.smart_rules_jsonb || [])],
+                      smart_exemplars_jsonb: [...(r.smart_exemplars_jsonb || [])],
+                      smart_score_threshold: r.smart_score_threshold ?? 55,
+                      modality: r.modality || "chat",
+                      exposed_protocols: routeProtocols(r),
+                    })} />
+                    <IconButton label={`Delete ${r.user_facing_model}`} icon="delete" tone="danger" onClick={() => del(r.id!, r.user_facing_model)} />
+                  </ListActions>
                 </td>
               </tr>
             ))}
             {!isLoading && !filtered.length && (
-              <tr><td colSpan={7}><EmptyState title={q ? "No routes match your search" : "No routes yet"} hint={q ? undefined : "Create one to expose a public model name backed by one or more upstream models."} /></td></tr>
+              <tr><td colSpan={5}><EmptyState title={q ? "No routes match your search" : "No routes yet"} hint={q ? undefined : "Create one to expose a public model name backed by one or more upstream models."} /></td></tr>
             )}
           </tbody>
         </table>

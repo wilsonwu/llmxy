@@ -2,7 +2,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
-import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
+import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type Tier = { size: string; quality: string; price_micro: number };
 type Pricing = { mode?: string; tiers?: Tier[]; default_price_micro?: number };
@@ -198,32 +198,58 @@ export default function ModelsPage() {
       <p className="text-xs text-gray-500">token rate unit: micro-cents (1/10000 cent) / 1K tokens (chat/embedding). image priced per generated image. e.g. 1500 ≈ $0.0015/1K · 400000 = $0.40/img.</p>
       <div className="card overflow-x-auto p-0">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>Display name</th><th>Channel</th><th>Upstream model</th><th>Kind</th><th>Upstream protocol</th><th>Pricing</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>Model</th><th>Upstream</th><th>Capability</th><th>Pricing</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            {isLoading && <TableSkeleton cols={10} />}
+            {isLoading && <TableSkeleton cols={6} />}
             {!isLoading && filtered.map((m) => (
               <tr key={m.id}>
-                <td>{m.id}</td><td className="font-mono text-xs">{m.code}</td><td>{m.display_name}</td>
-                <td>{chName(m.channel_id)}</td><td className="font-mono text-xs">{m.upstream_model}</td>
                 <td>
-                  {m.kind === "image" ? <Badge tone="purple">image</Badge>
-                    : m.kind === "embedding" ? <Badge tone="brand">embedding</Badge>
-                    : <Badge tone="info">chat</Badge>}
+                  <ListCell
+                    primary={<code className="font-mono text-xs">{m.code}</code>}
+                    secondary={<><ListMeta>#{m.id}</ListMeta><ListMeta>{m.display_name || "No display name"}</ListMeta></>}
+                  />
                 </td>
-                <td className="text-xs">
-                  <Badge tone={protocolTone(effectiveProtocol(m))}>{protocolLabel(effectiveProtocol(m))}</Badge>
-                  <span className="ml-1 text-gray-400">{m.upstream_protocol ? "model override" : "inherits channel"}</span>
+                <td>
+                  <ListCell
+                    primary={<code className="break-all font-mono text-xs">{m.upstream_model}</code>}
+                    secondary={<><ListMeta>{chName(m.channel_id)}</ListMeta><ListMeta>channel #{m.channel_id}</ListMeta></>}
+                  />
                 </td>
-                <td>{pricingSummary(m)}</td>
-                <td>{m.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
-                <td className="space-x-2 whitespace-nowrap">
-                  <button className="btn-outline" onClick={() => setEditing({ ...m })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(m.id!, m.code)}>Delete</button>
+                <td>
+                  <ListCell
+                    primary={
+                      <>
+                        {m.kind === "image" ? <Badge tone="purple">image</Badge>
+                          : m.kind === "embedding" ? <Badge tone="brand">embedding</Badge>
+                          : <Badge tone="info">chat</Badge>}
+                        <Badge tone={protocolTone(effectiveProtocol(m))}>{protocolLabel(effectiveProtocol(m))}</Badge>
+                      </>
+                    }
+                    secondary={m.upstream_protocol ? "model protocol override" : "inherits channel protocol"}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={pricingSummary(m)}
+                    secondary={m.kind === "image" ? "per generated image" : m.kind === "embedding" ? "prompt tokens only" : "prompt / completion per 1K"}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={m.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
+                    secondary={m.enabled ? "eligible for routes" : "disabled"}
+                  />
+                </td>
+                <td>
+                  <ListActions>
+                    <IconButton label={`Edit ${m.code}`} icon="edit" onClick={() => setEditing({ ...m })} />
+                    <IconButton label={`Delete ${m.code}`} icon="delete" tone="danger" onClick={() => del(m.id!, m.code)} />
+                  </ListActions>
                 </td>
               </tr>
             ))}
             {!isLoading && !filtered.length && (
-              <tr><td colSpan={10}><EmptyState title={q ? "No models match your search" : "No models yet"} hint={q ? undefined : "Register a model and bind it to a channel to make it routable."} /></td></tr>
+              <tr><td colSpan={6}><EmptyState title={q ? "No models match your search" : "No models yet"} hint={q ? undefined : "Register a model and bind it to a channel to make it routable."} /></td></tr>
             )}
           </tbody>
         </table>

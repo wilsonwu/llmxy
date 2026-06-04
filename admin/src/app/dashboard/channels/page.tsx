@@ -2,7 +2,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
-import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
+import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type C = { id?: number; name: string; provider_type: string; base_url: string; api_key_enc?: string; enabled: boolean };
 
@@ -65,23 +65,45 @@ export default function ChannelsPage() {
       </div>
       <div className="card overflow-x-auto p-0">
         <table className="table">
-          <thead><tr><th>ID</th><th>Name</th><th>Upstream protocol</th><th>BaseURL</th><th>Enabled</th><th></th></tr></thead>
+          <thead><tr><th>Channel</th><th>Upstream</th><th>Endpoint</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            {isLoading && <TableSkeleton cols={6} />}
+            {isLoading && <TableSkeleton cols={5} />}
             {!isLoading && filtered.map((c) => (
               <tr key={c.id}>
-                <td>{c.id}</td><td className="font-medium">{c.name}</td>
-                <td><Badge tone={protocolTone(c.provider_type)}>{protocolMeta(c.provider_type).label}</Badge></td>
-                <td className="font-mono text-xs">{c.base_url}</td>
-                <td>{c.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
-                <td className="space-x-2 whitespace-nowrap">
-                  <button className="btn-outline" onClick={() => setEditing({ ...c, api_key_enc: c.api_key_enc || "" })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(c.id!, c.name)}>Delete</button>
+                <td>
+                  <ListCell
+                    primary={<span>{c.name}</span>}
+                    secondary={<ListMeta>#{c.id}</ListMeta>}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={<Badge tone={protocolTone(c.provider_type)}>{protocolMeta(c.provider_type).label}</Badge>}
+                    secondary={protocolMeta(c.provider_type).hint}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={<code className="break-all font-mono text-xs text-gray-800">{c.base_url}</code>}
+                    secondary={<ListMeta>adapter {c.provider_type}</ListMeta>}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={c.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
+                    secondary={c.enabled ? "available for model routing" : "hidden from routing"}
+                  />
+                </td>
+                <td>
+                  <ListActions>
+                    <IconButton label={`Edit ${c.name}`} icon="edit" onClick={() => setEditing({ ...c, api_key_enc: c.api_key_enc || "" })} />
+                    <IconButton label={`Delete ${c.name}`} icon="delete" tone="danger" onClick={() => del(c.id!, c.name)} />
+                  </ListActions>
                 </td>
               </tr>
             ))}
             {!isLoading && !filtered.length && (
-              <tr><td colSpan={6}><EmptyState title={q ? "No channels match your search" : "No channels yet"} hint={q ? undefined : "Create one to point at an upstream provider like OpenAI or Azure."} /></td></tr>
+              <tr><td colSpan={5}><EmptyState title={q ? "No channels match your search" : "No channels yet"} hint={q ? undefined : "Create one to point at an upstream provider like OpenAI or Azure."} /></td></tr>
             )}
           </tbody>
         </table>

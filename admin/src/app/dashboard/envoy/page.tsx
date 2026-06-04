@@ -2,7 +2,7 @@
 import useSWR from "swr";
 import { useEffect, useState } from "react";
 import { api, fetcher } from "@/lib/api";
-import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
+import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type Mode = "local" | "remote";
 
@@ -428,53 +428,67 @@ export default function EnvoyPage() {
         <table className="table">
           <thead>
             <tr>
-              <th>ID</th><th>Name</th><th>Mode</th><th>Node id</th>
-              <th>Entry URL</th><th>Status</th><th>Version</th><th>cfg v</th>
-              <th>Last seen / health</th><th></th>
+              <th>Instance</th><th>Address</th><th>Status</th><th>Runtime</th><th>Last activity</th><th></th>
             </tr>
           </thead>
           <tbody>
-            {isLoading && <TableSkeleton cols={10} />}
+            {isLoading && <TableSkeleton cols={6} />}
             {!isLoading && (data || []).map((i) => (
               <tr key={i.id}>
-                <td>{i.id}</td>
-                <td className="font-medium">{i.name}</td>
                 <td>
-                  <Badge tone={i.mode === "remote" ? "purple" : "info"}>{i.mode}</Badge>
-                </td>
-                <td className="font-mono text-xs">{i.node_id}</td>
-                <td>
-                  <button
-                    className="font-mono text-xs text-brand-600 hover:underline"
-                    title="Click to copy"
-                    onClick={() => { navigator.clipboard.writeText(i.proxy_url); toast("URL copied", "info"); }}
-                    aria-label={`Copy proxy URL ${i.proxy_url}`}
-                  >
-                    {i.proxy_url}
-                  </button>
+                  <ListCell
+                    primary={<span>{i.name}</span>}
+                    secondary={<><ListMeta>#{i.id}</ListMeta><Badge tone={i.mode === "remote" ? "purple" : "info"}>{i.mode}</Badge><ListMeta><code className="font-mono">{i.node_id}</code></ListMeta></>}
+                  />
                 </td>
                 <td>
-                  {i.mode === "remote" ? (
-                    <Badge tone={remoteOnline(i) ? "success" : "neutral"}>{remoteOnline(i) ? "online" : "offline"}</Badge>
-                  ) : (
-                    <Badge tone={i.status === "running" ? "success" : i.status === "starting" ? "warning" : i.status === "error" ? "danger" : "neutral"}>{i.status}</Badge>
-                  )}
+                  <ListCell
+                    primary={
+                      <button
+                        className="break-all font-mono text-xs text-brand-600 hover:underline"
+                        title="Click to copy"
+                        onClick={() => { navigator.clipboard.writeText(i.proxy_url); toast("URL copied", "info"); }}
+                        aria-label={`Copy proxy URL ${i.proxy_url}`}
+                      >
+                        {i.proxy_url}
+                      </button>
+                    }
+                    secondary={i.admin_url ? <ListMeta>admin <code className="font-mono">{i.admin_url}</code></ListMeta> : <ListMeta>admin port {i.admin_port || "-"}</ListMeta>}
+                  />
                 </td>
-                <td className="font-mono text-xs text-gray-600">{i.version || "—"}</td>
-                <td>{i.config_version}</td>
-                <td className="text-xs text-gray-500">
-                  {(i.last_seen_at || i.last_health_at) ? new Date(i.last_seen_at || i.last_health_at!).toLocaleString() : "—"}
+                <td>
+                  <ListCell
+                    primary={i.mode === "remote" ? (
+                      <Badge tone={remoteOnline(i) ? "success" : "neutral"}>{remoteOnline(i) ? "online" : "offline"}</Badge>
+                    ) : (
+                      <Badge tone={i.status === "running" ? "success" : i.status === "starting" ? "warning" : i.status === "error" ? "danger" : "neutral"}>{i.status}</Badge>
+                    )}
+                    secondary={i.last_error || (i.mode === "remote" ? "xDS managed remote envoy" : `local pid ${i.pid || "-"}`)}
+                  />
                 </td>
-                <td className="space-x-1 whitespace-nowrap">
-                  {i.mode === "local" && i.status !== "running" && (
-                    <button className="btn-primary" onClick={() => act(i.id, "start")}>Start</button>
-                  )}
-                  {i.mode === "local" && i.status === "running" && (
-                    <button className="btn-primary" onClick={() => act(i.id, "reload")}>Sync</button>
-                  )}
-                  {i.mode === "remote" && (
-                    <button className="btn-primary" onClick={() => act(i.id, "reload")}>Sync</button>
-                  )}
+                <td>
+                  <ListCell
+                    primary={i.version || "version unknown"}
+                    secondary={<><ListMeta>cfg v{i.config_version}</ListMeta><ListMeta>listen :{i.listen_port}</ListMeta><ListMeta>admin :{i.admin_port || "-"}</ListMeta></>}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={(i.last_seen_at || i.last_health_at) ? new Date(i.last_seen_at || i.last_health_at!).toLocaleDateString() : "-"}
+                    secondary={(i.last_seen_at || i.last_health_at) ? new Date(i.last_seen_at || i.last_health_at!).toLocaleTimeString() : "no health yet"}
+                  />
+                </td>
+                <td>
+                  <ListActions>
+                    {i.mode === "local" && i.status !== "running" && (
+                      <button className="btn-primary" onClick={() => act(i.id, "start")}>Start</button>
+                    )}
+                    {i.mode === "local" && i.status === "running" && (
+                      <button className="btn-primary" onClick={() => act(i.id, "reload")}>Sync</button>
+                    )}
+                    {i.mode === "remote" && (
+                      <button className="btn-primary" onClick={() => act(i.id, "reload")}>Sync</button>
+                    )}
                   <span className="relative inline-block">
                     <button
                       className="btn-outline px-2"
@@ -531,12 +545,13 @@ export default function EnvoyPage() {
                       </>
                     )}
                   </span>
-                  <button className="btn-danger" onClick={() => del(i.id, i.name)}>Del</button>
+                  <IconButton label={`Delete ${i.name}`} icon="delete" tone="danger" onClick={() => del(i.id, i.name)} />
+                  </ListActions>
                 </td>
               </tr>
             ))}
             {!isLoading && (!data || data.length === 0) && (
-              <tr><td colSpan={10}><EmptyState title="No envoy instances" hint="Create one to spawn a managed subprocess or register a remote envoy via xDS." /></td></tr>
+              <tr><td colSpan={6}><EmptyState title="No envoy instances" hint="Create one to spawn a managed subprocess or register a remote envoy via xDS." /></td></tr>
             )}
           </tbody>
         </table>

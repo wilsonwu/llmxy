@@ -2,7 +2,7 @@
 import useSWR from "swr";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
-import { Badge, EmptyState, Modal, TableSkeleton, useToast } from "@/components/ui";
+import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
 
 type P = { id?: number; code: string; name: string; description?: string; plan_type: "recurring" | "one_time"; price_cents: number; quota_cents: number; duration_days: number; max_purchases_per_user?: number | null; active: boolean };
 const empty: P = { code: "", name: "", description: "", plan_type: "recurring", price_cents: 0, quota_cents: 0, duration_days: 30, max_purchases_per_user: null, active: true };
@@ -40,26 +40,46 @@ export default function PlansPage() {
       </div>
       <div className="card overflow-x-auto p-0">
         <table className="table">
-          <thead><tr><th>ID</th><th>code</th><th>Name</th><th>Type</th><th>Price</th><th>Quota</th><th>Duration</th><th>Limit</th><th>Active</th><th></th></tr></thead>
+          <thead><tr><th>Plan</th><th>Billing</th><th>Allowance</th><th>Availability</th><th></th></tr></thead>
           <tbody>
-            {isLoading && <TableSkeleton cols={10} />}
+            {isLoading && <TableSkeleton cols={5} />}
             {!isLoading && data?.map((p) => (
               <tr key={p.id}>
-                <td>{p.id}</td><td>{p.code}</td><td className="font-medium">{p.name}</td>
-                <td>{p.plan_type === "one_time" ? <Badge tone="purple">one-time</Badge> : <Badge tone="info">monthly</Badge>}</td>
-                <td>${(p.price_cents/100).toFixed(2)}{p.plan_type === "recurring" && <span className="text-xs text-gray-500"> /mo</span>}</td>
-                <td>${(p.quota_cents/100).toFixed(2)}</td>
-                <td>{p.plan_type === "one_time" ? `${p.duration_days}d` : "—"}</td>
-                <td>{p.plan_type === "one_time" ? (p.max_purchases_per_user == null ? "∞" : `${p.max_purchases_per_user}×`) : "—"}</td>
-                <td>{p.active ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}</td>
-                <td className="space-x-2 whitespace-nowrap">
-                  <button className="btn-outline" onClick={() => setEditing({ ...p })}>Edit</button>
-                  <button className="btn-danger" onClick={() => del(p.id!, p.name)}>Delete</button>
+                <td>
+                  <ListCell
+                    primary={<span>{p.name}</span>}
+                    secondary={<><ListMeta>#{p.id}</ListMeta><ListMeta><code>{p.code}</code></ListMeta>{p.description && <ListMeta>{p.description}</ListMeta>}</>}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={<>{p.plan_type === "one_time" ? <Badge tone="purple">one-time</Badge> : <Badge tone="info">monthly</Badge>} <span>${(p.price_cents / 100).toFixed(2)}</span></>}
+                    secondary={p.plan_type === "recurring" ? "renews monthly" : `expires after ${p.duration_days}d`}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={`$${(p.quota_cents / 100).toFixed(2)}`}
+                    secondary={p.plan_type === "one_time" ? `limit ${p.max_purchases_per_user == null ? "unlimited" : `${p.max_purchases_per_user}x`} per user` : "quota per cycle"}
+                    align="right"
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={p.active ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
+                    secondary={p.active ? "visible on pricing" : "hidden from purchase"}
+                  />
+                </td>
+                <td>
+                  <ListActions>
+                    <IconButton label={`Edit ${p.name}`} icon="edit" onClick={() => setEditing({ ...p })} />
+                    <IconButton label={`Delete ${p.name}`} icon="delete" tone="danger" onClick={() => del(p.id!, p.name)} />
+                  </ListActions>
                 </td>
               </tr>
             ))}
             {!isLoading && !data?.length && (
-              <tr><td colSpan={10}><EmptyState title="No plans yet" hint="Define subscription tiers that users can subscribe to on the pricing page." /></td></tr>
+              <tr><td colSpan={5}><EmptyState title="No plans yet" hint="Define subscription tiers that users can subscribe to on the pricing page." /></td></tr>
             )}
           </tbody>
         </table>

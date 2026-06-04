@@ -3,7 +3,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { useState } from "react";
 import { api, fetcher } from "@/lib/api";
-import { Badge, EmptyState, TableSkeleton, useToast } from "@/components/ui";
+import { Badge, EmptyState, ListActions, ListCell, ListMeta, TableSkeleton, useToast } from "@/components/ui";
 
 type User = { id: number; email: string; role: string; balance_cents: number; status: string; created_at: string };
 
@@ -46,28 +46,47 @@ export default function UsersPage() {
       </div>
       <div className="card overflow-x-auto p-0">
         <table className="table">
-          <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Balance</th><th>Status</th><th>Registered</th><th></th></tr></thead>
+          <thead><tr><th>User</th><th>Access</th><th>Wallet</th><th>Registered</th><th></th></tr></thead>
           <tbody>
-            {isLoading && <TableSkeleton cols={7} />}
+            {isLoading && <TableSkeleton cols={5} />}
             {!isLoading && data?.items?.map((u) => (
               <tr key={u.id}>
-                <td>{u.id}</td>
                 <td>
-                  <Link href={`/dashboard/users/${u.id}`} className="text-brand-600 hover:underline">{u.email}</Link>
+                  <ListCell
+                    primary={<Link href={`/dashboard/users/${u.id}`} className="text-brand-600 hover:underline">{u.email}</Link>}
+                    secondary={<ListMeta>#{u.id}</ListMeta>}
+                  />
                 </td>
-                <td>{u.role === "admin" ? <Badge tone="brand">admin</Badge> : <span className="text-xs text-gray-500">{u.role}</span>}</td>
-                <td>${(u.balance_cents/100).toFixed(2)}</td>
-                <td>{u.status === "active" ? <Badge tone="success">active</Badge> : <Badge tone="neutral">{u.status}</Badge>}</td>
-                <td className="text-xs text-gray-500">{new Date(u.created_at).toLocaleString()}</td>
-                <td className="space-x-2 whitespace-nowrap">
-                  <button className="btn-outline" onClick={() => adjust(u)}>Adjust balance</button>
-                  <button className="btn-outline" onClick={() => reset(u)}>Reset password</button>
-                  <button className="btn-danger" onClick={() => toggle(u)}>{u.status === "active" ? "Disable" : "Enable"}</button>
+                <td>
+                  <ListCell
+                    primary={u.role === "admin" ? <Badge tone="brand">admin</Badge> : <span>{u.role}</span>}
+                    secondary={u.status === "active" ? <Badge tone="success">active</Badge> : <Badge tone="neutral">{u.status}</Badge>}
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={`$${(u.balance_cents / 100).toFixed(2)}`}
+                    secondary="available balance"
+                    align="right"
+                  />
+                </td>
+                <td>
+                  <ListCell
+                    primary={new Date(u.created_at).toLocaleDateString()}
+                    secondary={new Date(u.created_at).toLocaleTimeString()}
+                  />
+                </td>
+                <td>
+                  <ListActions>
+                    <button className="btn-outline" onClick={() => adjust(u)}>Adjust balance</button>
+                    <button className="btn-outline" onClick={() => reset(u)}>Reset password</button>
+                    <button className="btn-danger" onClick={() => toggle(u)}>{u.status === "active" ? "Disable" : "Enable"}</button>
+                  </ListActions>
                 </td>
               </tr>
             ))}
             {!isLoading && !data?.items?.length && (
-              <tr><td colSpan={7}><EmptyState title={q ? "No users match your search" : "No users yet"} /></td></tr>
+              <tr><td colSpan={5}><EmptyState title={q ? "No users match your search" : "No users yet"} /></td></tr>
             )}
           </tbody>
         </table>

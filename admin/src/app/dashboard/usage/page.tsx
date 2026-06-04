@@ -105,7 +105,7 @@ function LogsPanel() {
       </div>
 
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table table-compact">
           <thead>
             <tr>
               <th>Time</th><th>User</th><th>Key</th>
@@ -202,7 +202,7 @@ function TxPanel() {
       </div>
 
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table table-compact">
           <thead>
             <tr>
               <th>Time</th><th>User</th><th>Type</th>

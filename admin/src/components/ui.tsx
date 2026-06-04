@@ -261,6 +261,91 @@ export function Badge({
 }
 
 /* -------------------------------------------------------------------------- */
+/*  List cells                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export function ListCell({
+  primary,
+  secondary,
+  className = "",
+  align = "left",
+}: {
+  primary: ReactNode;
+  secondary?: ReactNode;
+  className?: string;
+  align?: "left" | "right";
+}) {
+  const alignClass = align === "right" ? "items-end text-right" : "items-start text-left";
+  return (
+    <div className={`flex min-w-0 flex-col gap-1 ${alignClass} ${className}`}>
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium leading-5 text-gray-900">
+        {primary}
+      </div>
+      {secondary !== undefined && (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-4 text-gray-500">
+          {secondary}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ListMeta({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <span className={`inline-flex min-w-0 items-center gap-1 ${className}`}>{children}</span>;
+}
+
+export function ListActions({ children }: { children: ReactNode }) {
+  return <div className="flex flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap">{children}</div>;
+}
+
+export function IconButton({
+  label,
+  icon,
+  tone = "neutral",
+  onClick,
+  disabled = false,
+  className = "",
+}: {
+  label: string;
+  icon: "edit" | "delete";
+  tone?: "neutral" | "danger";
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const toneClass = tone === "danger"
+    ? "border-transparent text-red-600 hover:bg-red-50"
+    : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 ${toneClass} ${className}`}
+    >
+      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {icon === "edit" ? (
+          <>
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </>
+        ) : (
+          <>
+            <path d="M3 6h18" />
+            <path d="M8 6V4h8v2" />
+            <path d="M19 6l-1 14H6L5 6" />
+            <path d="M10 11v5" />
+            <path d="M14 11v5" />
+          </>
+        )}
+      </svg>
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Skeleton / TableSkeleton / EmptyState / Spinner                           */
 /* -------------------------------------------------------------------------- */
 

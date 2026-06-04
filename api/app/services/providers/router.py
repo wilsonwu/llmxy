@@ -52,6 +52,14 @@ def _ordered_targets(
     return out
 
 
+def _target_label(target: dict) -> Optional[str]:
+    label = target.get("label")
+    if label is None:
+        return None
+    normalized = str(label).strip()
+    return normalized or None
+
+
 # ---------------------------------------------------------------------------
 # Prompt extraction
 # ---------------------------------------------------------------------------
@@ -232,7 +240,7 @@ async def _smart_pick(
     otherwise the rule list decides. Either way, `smart_default_label`
     catches unmatched requests.
     """
-    labels = [str(t.get("label")) for _, _, t in pairs if t.get("label")]
+    labels = [label for _, _, t in pairs if (label := _target_label(t))]
     unique_labels = list(dict.fromkeys(labels))
 
     chosen_label: Optional[str] = None
@@ -252,18 +260,16 @@ async def _smart_pick(
             chosen_label = _apply_rules(policy.smart_rules_jsonb or [], ctx)
     if not chosen_label:
         chosen_label = policy.smart_default_label
-
-    head: Optional[tuple[Model, Channel]] = None
-    rest: list[tuple[Model, Channel]] = []
     if chosen_label:
-        for m, c, t in pairs:
-            if head is None and t.get("label") == chosen_label:
-                head = (m, c)
-            else:
-                rest.append((m, c))
-    if head is None:
-        return _weighted_order(pairs), chosen_label, embedding_usage
-    return [head] + rest, chosen_label, embedding_usage
+        chosen_label = str(chosen_label).strip() or None
+
+    if chosen_label:
+        matched = [(m, c, t) for m, c, t in pairs if _target_label(t) == chosen_label]
+        if matched:
+            matched.sort(key=lambda x: int(x[2].get("fallback_order", 0)))
+            return [(m, c) for m, c, _ in matched], chosen_label, embedding_usage
+
+    return _weighted_order(pairs), chosen_label, embedding_usage
 
 
 def _weighted_order(pairs: list[tuple[Model, Channel, dict]]) -> list[tuple[Model, Channel]]:

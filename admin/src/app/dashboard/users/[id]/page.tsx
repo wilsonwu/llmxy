@@ -3,6 +3,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { fetcher } from "@/lib/api";
+import { Badge, ListCell, ListMeta } from "@/components/ui";
 
 type Sub = {
   id: number;
@@ -53,15 +54,29 @@ export default function UserDetailPage() {
           <p className="text-sm text-gray-500">No active subscription. Requests draw from wallet balance.</p>
         ) : (
           <table className="table">
-            <thead><tr><th>Order</th><th>Plan</th><th>Remaining</th><th>Started</th><th>Expires</th></tr></thead>
+            <thead><tr><th>Subscription</th><th>Balance</th><th>Period</th></tr></thead>
             <tbody>
               {active.slice().sort((a, b) => new Date(a.end_at).getTime() - new Date(b.end_at).getTime()).map((s, i) => (
                 <tr key={s.id}>
-                  <td>{i + 1}</td>
-                  <td>{s.plan_name || s.plan_code || `#${s.plan_id}`}</td>
-                  <td>${(s.remaining_cents/100).toFixed(2)}</td>
-                  <td>{new Date(s.start_at).toLocaleDateString()}</td>
-                  <td>{new Date(s.end_at).toLocaleString()}</td>
+                  <td>
+                    <ListCell
+                      primary={s.plan_name || s.plan_code || `#${s.plan_id}`}
+                      secondary={<><ListMeta>order {i + 1}</ListMeta><ListMeta>plan #{s.plan_id}</ListMeta><ListMeta>sub #{s.id}</ListMeta></>}
+                    />
+                  </td>
+                  <td>
+                    <ListCell
+                      primary={`$${(s.remaining_cents / 100).toFixed(2)}`}
+                      secondary={<Badge tone="success">active</Badge>}
+                      align="right"
+                    />
+                  </td>
+                  <td>
+                    <ListCell
+                      primary={new Date(s.end_at).toLocaleDateString()}
+                      secondary={<><ListMeta>started {new Date(s.start_at).toLocaleDateString()}</ListMeta><ListMeta>expires {new Date(s.end_at).toLocaleTimeString()}</ListMeta></>}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -73,15 +88,29 @@ export default function UserDetailPage() {
         <div className="card overflow-x-auto">
           <h2 className="mb-3 text-lg font-semibold">Past / exhausted</h2>
           <table className="table">
-            <thead><tr><th>Plan</th><th>Remaining</th><th>Status</th><th>Started</th><th>Ended</th></tr></thead>
+            <thead><tr><th>Subscription</th><th>Balance</th><th>Period</th></tr></thead>
             <tbody>
               {others.map((s) => (
                 <tr key={s.id} className="text-gray-500">
-                  <td>{s.plan_name || s.plan_code || `#${s.plan_id}`}</td>
-                  <td>${(s.remaining_cents/100).toFixed(2)}</td>
-                  <td>{s.status}</td>
-                  <td>{new Date(s.start_at).toLocaleDateString()}</td>
-                  <td>{new Date(s.end_at).toLocaleString()}</td>
+                  <td>
+                    <ListCell
+                      primary={s.plan_name || s.plan_code || `#${s.plan_id}`}
+                      secondary={<><ListMeta>plan #{s.plan_id}</ListMeta><ListMeta>sub #{s.id}</ListMeta></>}
+                    />
+                  </td>
+                  <td>
+                    <ListCell
+                      primary={`$${(s.remaining_cents / 100).toFixed(2)}`}
+                      secondary={<Badge tone="neutral">{s.status}</Badge>}
+                      align="right"
+                    />
+                  </td>
+                  <td>
+                    <ListCell
+                      primary={new Date(s.end_at).toLocaleDateString()}
+                      secondary={<><ListMeta>started {new Date(s.start_at).toLocaleDateString()}</ListMeta><ListMeta>ended {new Date(s.end_at).toLocaleTimeString()}</ListMeta></>}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
