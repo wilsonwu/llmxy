@@ -66,8 +66,7 @@ export default function UserDetailPage() {
                   </td>
                   <td>
                     <ListCell
-                      primary={`$${(s.remaining_cents / 100).toFixed(2)}`}
-                      secondary={<Badge tone="success">active</Badge>}
+                      primary={<><span>${(s.remaining_cents / 100).toFixed(2)}</span><Badge tone="success">active</Badge></>}
                       align="right"
                     />
                   </td>
@@ -100,8 +99,7 @@ export default function UserDetailPage() {
                   </td>
                   <td>
                     <ListCell
-                      primary={`$${(s.remaining_cents / 100).toFixed(2)}`}
-                      secondary={<Badge tone="neutral">{s.status}</Badge>}
+                      primary={<><span>${(s.remaining_cents / 100).toFixed(2)}</span><Badge tone="neutral">{s.status}</Badge></>}
                       align="right"
                     />
                   </td>

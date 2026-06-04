@@ -1,6 +1,6 @@
 "use client";
 import useSWR from "swr";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, fetcher } from "@/lib/api";
 import { COUNTRIES, COUNTRY_NAME } from "@/lib/countries";
 import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
@@ -88,9 +88,17 @@ export default function RoutesPage() {
   const { data: channels } = useSWR<C[]>("/api/v1/admin/channels", fetcher);
   const embeddingModels = (models || []).filter((m) => m.kind === "embedding");
   const [editing, setEditing] = useState<R | null>(null);
+  const editingKey = editing ? (editing.id ?? "new") : "closed";
+  const [extraSmartLabels, setExtraSmartLabels] = useState<string[]>([]);
+  const [newSmartLabel, setNewSmartLabel] = useState("");
   const [q, setQ] = useState("");
   const { toast, confirm } = useToast();
   const filtered = (data || []).filter(r => !q || r.user_facing_model.toLowerCase().includes(q.toLowerCase()));
+
+  useEffect(() => {
+    setExtraSmartLabels([]);
+    setNewSmartLabel("");
+  }, [editingKey]);
 
   async function save(r: R) {
     const payload: R = { ...r };
@@ -103,6 +111,10 @@ export default function RoutesPage() {
       payload.smart_exemplars_jsonb = [];
     } else {
       payload.smart_default_label = DEFAULT_LABEL;
+      payload.targets_jsonb = payload.targets_jsonb.map((t) => ({
+        ...t,
+        label: (t.label || DEFAULT_LABEL).trim() || DEFAULT_LABEL,
+      }));
     }
     try {
       if (r.id) await api(`/api/v1/admin/routes/${r.id}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -145,26 +157,64 @@ export default function RoutesPage() {
     return `${m.code} — ${m.display_name} · upstream ${protocolLabel(effectiveProtocol(m))} via ${connectorLabel(effectiveConnector(m))} · ${m.upstream_model}${disabled}`;
   };
 
-  const renderTargetSummary = (r: R) =>
-    r.targets_jsonb.map((t, i) => {
-      const model = modelById(t.model_id);
-      const protocol = effectiveProtocol(model);
-      const connector = effectiveConnector(model);
-      const extras: string[] = [];
-      if (r.strategy === "weighted") extras.push(`w${t.weight}`);
-      if (r.strategy === "fallback") extras.push(`o${t.fallback_order}`);
-      if (r.strategy === "smart") {
-        extras.push(t.label ? `[${t.label}]` : "[no-label]");
-        extras.push(`w${t.weight}`);
+  const targetLabel = (target: Target) => (target.label || DEFAULT_LABEL).trim() || DEFAULT_LABEL;
+
+  const renderTargetChip = (target: Target, text: string, key: string | number) => {
+    const model = modelById(target.model_id);
+    const protocol = effectiveProtocol(model);
+    const connector = effectiveConnector(model);
+    return (
+      <span
+        key={key}
+        className="inline-flex max-w-[14rem] items-center rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] leading-4 text-gray-700"
+        title={model ? `Upstream protocol: ${protocol}; connector: ${connector}; model: ${model.upstream_model}` : undefined}
+      >
+        <span className="truncate">{text}</span>
+      </span>
+    );
+  };
+
+  const renderTargetSummary = (r: R) => {
+    if (!r.targets_jsonb.length) return <span className="text-gray-400">no targets</span>;
+    if (r.strategy === "smart") {
+      const groups = new Map<string, Target[]>();
+      for (const target of r.targets_jsonb) {
+        const label = targetLabel(target);
+        groups.set(label, [...(groups.get(label) || []), target]);
       }
+      const labels = Array.from(groups.keys()).sort((a, b) => (
+        a === DEFAULT_LABEL ? -1 : b === DEFAULT_LABEL ? 1 : a.localeCompare(b)
+      ));
       return (
-        <span key={i} className="mr-2 inline-flex items-center gap-1" title={model ? `Upstream protocol: ${protocol}; connector: ${connector}; model: ${model.upstream_model}` : undefined}>
-          <span>{modelLabel(t.model_id)}({extras.join("/")})</span>
-          <Badge tone={protocolTone(protocol)}>{protocolLabel(protocol)}</Badge>
-          <Badge tone="neutral">{connectorLabel(connector)}</Badge>
-        </span>
+        <div className="flex min-w-0 flex-col gap-1">
+          {labels.map((label) => (
+            <div key={label} className="flex min-w-0 flex-wrap items-center gap-1">
+              <Badge tone={label === DEFAULT_LABEL ? "neutral" : "info"} className="max-w-[9rem] truncate font-mono">{label}</Badge>
+              {(groups.get(label) || []).map((target, index) => renderTargetChip(target, `${modelLabel(target.model_id)} · w${target.weight}`, `${label}-${index}`))}
+            </div>
+          ))}
+        </div>
       );
-    });
+    }
+    return (
+      <div className="flex min-w-0 flex-wrap gap-1">
+        {r.targets_jsonb.map((target, index) => renderTargetChip(
+          target,
+          r.strategy === "fallback"
+            ? `${modelLabel(target.model_id)} · o${target.fallback_order}`
+            : `${modelLabel(target.model_id)} · w${target.weight}`,
+          index,
+        ))}
+      </div>
+    );
+  };
+
+  const targetPrimary = (r: R) => {
+    const count = r.targets_jsonb.length;
+    if (r.strategy !== "smart") return `${count} target${count === 1 ? "" : "s"}`;
+    const labelCount = new Set(r.targets_jsonb.map(targetLabel)).size;
+    return `${count} target${count === 1 ? "" : "s"} / ${labelCount} label${labelCount === 1 ? "" : "s"}`;
+  };
 
   return (
     <div className="space-y-4">
@@ -213,15 +263,12 @@ export default function RoutesPage() {
                 </td>
                 <td>
                   <ListCell
-                    primary={<span>{r.targets_jsonb.length} target{r.targets_jsonb.length === 1 ? "" : "s"}</span>}
+                    primary={<span>{targetPrimary(r)}</span>}
                     secondary={renderTargetSummary(r)}
                   />
                 </td>
                 <td>
-                  <ListCell
-                    primary={r.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
-                    secondary={r.enabled ? "served to clients" : "not routable"}
-                  />
+                  {r.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
                 </td>
                 <td>
                   <ListActions>
@@ -260,7 +307,10 @@ export default function RoutesPage() {
         const exemplarLabels: string[] = Array.from(new Set(
           exemplars.map((x) => x.label).filter((s) => typeof s === "string" && s.trim().length > 0),
         ));
-        const allLabels: string[] = Array.from(new Set([...ruleLabels, ...exemplarLabels, DEFAULT_LABEL]));
+        const targetLabels: string[] = e.targets_jsonb
+          .map((t) => (t.label || DEFAULT_LABEL).trim())
+          .filter((s) => s.length > 0);
+        const allLabels: string[] = Array.from(new Set([...ruleLabels, ...exemplarLabels, ...targetLabels, ...extraSmartLabels, DEFAULT_LABEL]));
 
         const nextLabel = (prefix: string): string => {
           const taken = new Set((e.smart_rules_jsonb || []).map((r: any) => r.label).filter(Boolean));
@@ -294,11 +344,38 @@ export default function RoutesPage() {
           </select>
         );
 
-        const targetRowClass = e.strategy === "smart"
-          ? "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_minmax(0,10rem)_auto] sm:items-center"
-          : e.strategy === "weighted"
-            ? "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center"
-            : "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center";
+        const availableTargetModels = models?.filter((m) => (m.kind || "chat") === (e.modality || "chat")) || [];
+        const firstTargetModelId = availableTargetModels[0]?.id || 0;
+        const makeTarget = (label?: string): Target => ({
+          model_id: firstTargetModelId,
+          weight: 1,
+          fallback_order: e.targets_jsonb.length,
+          label: e.strategy === "smart" ? (label || DEFAULT_LABEL) : "",
+        });
+        const labelForTarget = (target: Target) => (target.label || DEFAULT_LABEL).trim() || DEFAULT_LABEL;
+        const addSmartLabel = () => {
+          const label = newSmartLabel.trim();
+          if (!label) return;
+          setExtraSmartLabels((prev) => prev.includes(label) ? prev : [...prev, label]);
+          setNewSmartLabel("");
+        };
+        const renderTargetMeta = (selected?: M) => {
+          if (!selected) return null;
+          const channel = channelById(selected.channel_id);
+          const protocol = effectiveProtocol(selected);
+          const isModelOverride = Boolean(selected.upstream_protocol);
+          return (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <span>auto upstream</span>
+              <Badge tone={protocolTone(protocol)}>{protocol}</Badge>
+              <span>upstream <code>{selected.upstream_model}</code></span>
+              <span>channel {channel?.name || `#${selected.channel_id}`}</span>
+              <span>{isModelOverride ? "from model adapter" : "from channel default"}</span>
+            </div>
+          );
+        };
+
+        const targetRowClass = "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center";
 
         const renderTargets = () => (
           <div>
@@ -306,24 +383,11 @@ export default function RoutesPage() {
               <label className="label !mb-0">Targets</label>
               <button className="btn-outline text-xs" onClick={() => setEditing({
                 ...e,
-                targets_jsonb: [...e.targets_jsonb, {
-                  model_id: (models?.find((m) => (m.kind || "chat") === (e.modality || "chat"))?.id) || 0,
-                  weight: 1,
-                  fallback_order: e.targets_jsonb.length,
-                  label: "",
-                }],
+                targets_jsonb: [...e.targets_jsonb, makeTarget()],
               })}>+ Add</button>
             </div>
-            {e.strategy === "smart" && (
-              <p className="mb-2 text-xs text-gray-500">
-                Pick a label for each target — multiple targets may share a label and will be balanced by weight. The <code>default</code> label catches anything that doesn&apos;t match.
-              </p>
-            )}
             {e.targets_jsonb.map((t, i) => {
               const selected = modelById(t.model_id);
-              const channel = selected ? channelById(selected.channel_id) : undefined;
-              const protocol = effectiveProtocol(selected);
-              const isModelOverride = Boolean(selected?.upstream_protocol);
               return (
                 <div key={i} className="mb-2 rounded border border-gray-200 bg-white p-2">
                   <div className={targetRowClass}>
@@ -335,7 +399,7 @@ export default function RoutesPage() {
                         <option key={m.id} value={m.id}>{modelOptionLabel(m)}</option>
                       ))}
                     </select>
-                    {(e.strategy === "weighted" || e.strategy === "smart") && (
+                    {e.strategy === "weighted" && (
                       <input className="input w-full min-w-0" type="number" min={0} placeholder="weight" value={t.weight}
                         onChange={(ev) => {
                           const v = [...e.targets_jsonb]; v[i] = { ...t, weight: +ev.target.value };
@@ -349,32 +413,108 @@ export default function RoutesPage() {
                           setEditing({ ...e, targets_jsonb: v });
                         }} />
                     )}
-                    {e.strategy === "smart" && (
-                      <LabelSelect value={t.label || ""} options={allLabels}
-                        onChange={(v) => {
-                          const arr = [...e.targets_jsonb]; arr[i] = { ...t, label: v };
-                          setEditing({ ...e, targets_jsonb: arr });
-                        }} />
-                    )}
                     <button className="btn-danger w-full sm:w-auto" onClick={() => {
                       const v = e.targets_jsonb.filter((_, j) => j !== i);
                       setEditing({ ...e, targets_jsonb: v });
                     }}>×</button>
                   </div>
-                  {selected && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                      <span>auto upstream</span>
-                      <Badge tone={protocolTone(protocol)}>{protocol}</Badge>
-                      <span>upstream <code>{selected.upstream_model}</code></span>
-                      <span>channel {channel?.name || `#${selected.channel_id}`}</span>
-                      <span>{isModelOverride ? "from model adapter" : "from channel default"}</span>
-                    </div>
-                  )}
+                  {renderTargetMeta(selected)}
                 </div>
               );
             })}
           </div>
         );
+
+        const renderSmartTargets = () => {
+          const smartLabels = Array.from(new Set([DEFAULT_LABEL, ...allLabels]));
+          const addModelToLabel = (label: string) => setEditing({
+            ...e,
+            targets_jsonb: [...e.targets_jsonb, makeTarget(label)],
+          });
+          return (
+            <div>
+              <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <label className="label !mb-0">Targets by label</label>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:w-[360px]">
+                  <input
+                    className="input min-w-0"
+                    placeholder="new label"
+                    value={newSmartLabel}
+                    onChange={(ev) => setNewSmartLabel(ev.target.value)}
+                    onKeyDown={(ev) => {
+                      if (ev.key === "Enter") {
+                        ev.preventDefault();
+                        addSmartLabel();
+                      }
+                    }}
+                  />
+                  <button className="btn-outline text-xs" onClick={addSmartLabel}>Add label</button>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {smartLabels.map((label) => {
+                  const group = e.targets_jsonb
+                    .map((target, index) => ({ target, index }))
+                    .filter(({ target }) => labelForTarget(target) === label);
+                  const canRemoveLabel = label !== DEFAULT_LABEL && group.length === 0 && extraSmartLabels.includes(label);
+                  return (
+                    <div key={label} className="rounded border border-gray-200 bg-white p-3">
+                      <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <span className="inline-flex max-w-full items-center rounded bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-700">
+                            <span className="truncate">{label}</span>
+                          </span>
+                          <span className="ml-2 text-xs text-gray-500">{group.length} model{group.length === 1 ? "" : "s"}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {canRemoveLabel && (
+                            <button className="btn-ghost text-xs" onClick={() => setExtraSmartLabels((prev) => prev.filter((x) => x !== label))}>Remove label</button>
+                          )}
+                          <button className="btn-outline text-xs" onClick={() => addModelToLabel(label)}>+ Add model</button>
+                        </div>
+                      </div>
+                      {group.length === 0 ? (
+                        <p className="text-xs text-gray-400">No target models.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {group.map(({ target, index }) => {
+                            const selected = modelById(target.model_id);
+                            return (
+                              <div key={index} className="rounded border border-gray-100 bg-gray-50 p-2">
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center">
+                                  <select className="input w-full min-w-0" value={target.model_id} onChange={(ev) => {
+                                    const next = [...e.targets_jsonb];
+                                    next[index] = { ...target, model_id: +ev.target.value, label };
+                                    setEditing({ ...e, targets_jsonb: next });
+                                  }}>
+                                    {availableTargetModels.map((m) => (
+                                      <option key={m.id} value={m.id}>{modelOptionLabel(m)}</option>
+                                    ))}
+                                  </select>
+                                  <input className="input w-full min-w-0" type="number" min={0} placeholder="weight" value={target.weight}
+                                    onChange={(ev) => {
+                                      const next = [...e.targets_jsonb];
+                                      next[index] = { ...target, weight: +ev.target.value, label };
+                                      setEditing({ ...e, targets_jsonb: next });
+                                    }} />
+                                  <button className="btn-danger w-full sm:w-auto" onClick={() => {
+                                    const next = e.targets_jsonb.filter((_, j) => j !== index);
+                                    setEditing({ ...e, targets_jsonb: next });
+                                  }}>×</button>
+                                </div>
+                                {renderTargetMeta(selected)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        };
 
         return (
         <Modal
@@ -733,7 +873,7 @@ export default function RoutesPage() {
               </div>
             )}
 
-            {e.strategy === "smart" && renderTargets()}
+            {e.strategy === "smart" && renderSmartTargets()}
 
             <div>
               <label className="label">Scope (visibility)</label>

@@ -58,10 +58,10 @@ export default function UsersPage() {
                   />
                 </td>
                 <td>
-                  <ListCell
-                    primary={u.role === "admin" ? <Badge tone="brand">admin</Badge> : <span>{u.role}</span>}
-                    secondary={u.status === "active" ? <Badge tone="success">active</Badge> : <Badge tone="neutral">{u.status}</Badge>}
-                  />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {u.role === "admin" ? <Badge tone="brand">admin</Badge> : <Badge tone="neutral">{u.role}</Badge>}
+                    {u.status === "active" ? <Badge tone="success">active</Badge> : <Badge tone="neutral">{u.status}</Badge>}
+                  </div>
                 </td>
                 <td>
                   <ListCell

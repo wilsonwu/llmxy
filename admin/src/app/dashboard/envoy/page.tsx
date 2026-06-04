@@ -457,14 +457,13 @@ export default function EnvoyPage() {
                   />
                 </td>
                 <td>
-                  <ListCell
-                    primary={i.mode === "remote" ? (
+                  <span title={i.last_error || (i.mode === "remote" ? "xDS managed remote envoy" : `local pid ${i.pid || "-"}`)}>
+                    {i.mode === "remote" ? (
                       <Badge tone={remoteOnline(i) ? "success" : "neutral"}>{remoteOnline(i) ? "online" : "offline"}</Badge>
                     ) : (
                       <Badge tone={i.status === "running" ? "success" : i.status === "starting" ? "warning" : i.status === "error" ? "danger" : "neutral"}>{i.status}</Badge>
                     )}
-                    secondary={i.last_error || (i.mode === "remote" ? "xDS managed remote envoy" : `local pid ${i.pid || "-"}`)}
-                  />
+                  </span>
                 </td>
                 <td>
                   <ListCell

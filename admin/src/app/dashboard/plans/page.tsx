@@ -65,10 +65,7 @@ export default function PlansPage() {
                   />
                 </td>
                 <td>
-                  <ListCell
-                    primary={p.active ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
-                    secondary={p.active ? "visible on pricing" : "hidden from purchase"}
-                  />
+                  {p.active ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
                 </td>
                 <td>
                   <ListActions>

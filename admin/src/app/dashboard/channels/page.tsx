@@ -107,10 +107,7 @@ export default function ChannelsPage() {
                   />
                 </td>
                 <td>
-                  <ListCell
-                    primary={c.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
-                    secondary={c.enabled ? "available for model routing" : "hidden from routing"}
-                  />
+                  {c.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
                 </td>
                 <td>
                   <ListActions>

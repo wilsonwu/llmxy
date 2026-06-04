@@ -245,10 +245,7 @@ export default function ModelsPage() {
                   />
                 </td>
                 <td>
-                  <ListCell
-                    primary={m.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
-                    secondary={m.enabled ? "eligible for routes" : "disabled"}
-                  />
+                  {m.enabled ? <Badge tone="success">on</Badge> : <Badge tone="neutral">off</Badge>}
                 </td>
                 <td>
                   <ListActions>
