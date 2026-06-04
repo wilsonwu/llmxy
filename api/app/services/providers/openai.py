@@ -8,7 +8,13 @@ import httpx
 from app.core.crypto import decrypt
 from app.models import Channel
 from app.services.providers.base import ChatResult
-from app.services.providers.openai_compat import normalize_chat_payload_for_model
+from app.services.providers.openai_compat import (
+    MAX_COMPLETION_TOKENS_FIELD,
+    MAX_TOKENS_FIELD,
+    normalize_chat_payload_for_protocol,
+    should_retry_with_max_tokens,
+    should_retry_with_max_completion_tokens,
+)
 
 
 class OpenAIAdapter:
@@ -17,6 +23,18 @@ class OpenAIAdapter:
     base_url should be the API root (e.g. https://api.openai.com/v1).
     """
     name = "openai"
+
+    def __init__(self) -> None:
+        self._token_limit_fields: dict[tuple[int | None, str], str] = {}
+
+    def _target_key(self, channel: Channel, upstream_model: str) -> tuple[int | None, str]:
+        return (getattr(channel, "id", None), upstream_model)
+
+    def _preferred_token_field(self, channel: Channel, upstream_model: str) -> str | None:
+        return self._token_limit_fields.get(self._target_key(channel, upstream_model))
+
+    def _remember_token_field(self, channel: Channel, upstream_model: str, field: str) -> None:
+        self._token_limit_fields[self._target_key(channel, upstream_model)] = field
 
     def _headers(self, channel: Channel) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
@@ -33,7 +51,10 @@ class OpenAIAdapter:
         return f"{base}{path}"
 
     async def chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
-        body = normalize_chat_payload_for_model(payload, upstream_model)
+        body = normalize_chat_payload_for_protocol(
+            payload,
+            preferred_token_field=self._preferred_token_field(channel, upstream_model),
+        )
         body["model"] = upstream_model
         body["stream"] = stream
         if stream:
@@ -51,6 +72,32 @@ class OpenAIAdapter:
                     data = r.json()
                 except Exception:
                     data = {"error": {"message": r.text}}
+                if r.status_code == 400 and should_retry_with_max_completion_tokens(payload, data):
+                    self._remember_token_field(channel, upstream_model, MAX_COMPLETION_TOKENS_FIELD)
+                    body = normalize_chat_payload_for_protocol(
+                        payload,
+                        preferred_token_field=MAX_COMPLETION_TOKENS_FIELD,
+                    )
+                    body["model"] = upstream_model
+                    body["stream"] = stream
+                    r = await cli.post(url, json=body, headers=headers)
+                    try:
+                        data = r.json()
+                    except Exception:
+                        data = {"error": {"message": r.text}}
+                elif r.status_code == 400 and should_retry_with_max_tokens(payload, data):
+                    self._remember_token_field(channel, upstream_model, MAX_TOKENS_FIELD)
+                    body = normalize_chat_payload_for_protocol(
+                        payload,
+                        preferred_token_field=MAX_TOKENS_FIELD,
+                    )
+                    body["model"] = upstream_model
+                    body["stream"] = stream
+                    r = await cli.post(url, json=body, headers=headers)
+                    try:
+                        data = r.json()
+                    except Exception:
+                        data = {"error": {"message": r.text}}
                 usage = (data or {}).get("usage") or {}
                 return ChatResult(
                     status=r.status_code,
@@ -62,6 +109,44 @@ class OpenAIAdapter:
         async def gen() -> AsyncIterator[bytes]:
             async with httpx.AsyncClient(timeout=None) as cli:
                 async with cli.stream("POST", url, json=body, headers=headers) as r:
+                    if r.status_code == 400:
+                        raw = await r.aread()
+                        try:
+                            data = json.loads(raw.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            data = {"error": {"message": raw.decode("utf-8", errors="ignore")}}
+                        if should_retry_with_max_completion_tokens(payload, data):
+                            self._remember_token_field(channel, upstream_model, MAX_COMPLETION_TOKENS_FIELD)
+                            retry_body = normalize_chat_payload_for_protocol(
+                                payload,
+                                preferred_token_field=MAX_COMPLETION_TOKENS_FIELD,
+                            )
+                            retry_body["model"] = upstream_model
+                            retry_body["stream"] = stream
+                            opts = dict(retry_body.get("stream_options") or {})
+                            opts["include_usage"] = True
+                            retry_body["stream_options"] = opts
+                            async with cli.stream("POST", url, json=retry_body, headers=headers) as retry:
+                                async for chunk in retry.aiter_raw():
+                                    yield chunk
+                            return
+                        if should_retry_with_max_tokens(payload, data):
+                            self._remember_token_field(channel, upstream_model, MAX_TOKENS_FIELD)
+                            retry_body = normalize_chat_payload_for_protocol(
+                                payload,
+                                preferred_token_field=MAX_TOKENS_FIELD,
+                            )
+                            retry_body["model"] = upstream_model
+                            retry_body["stream"] = stream
+                            opts = dict(retry_body.get("stream_options") or {})
+                            opts["include_usage"] = True
+                            retry_body["stream_options"] = opts
+                            async with cli.stream("POST", url, json=retry_body, headers=headers) as retry:
+                                async for chunk in retry.aiter_raw():
+                                    yield chunk
+                            return
+                        yield raw
+                        return
                     async for chunk in r.aiter_raw():
                         yield chunk
 

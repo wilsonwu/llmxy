@@ -10,19 +10,16 @@ from app.db.session import get_db
 from app.models import Channel, Model, User
 from app.schemas import ChannelIn, ChannelOut
 from app.services.envoy.config import regenerate_all_running
-from app.services.providers import SUPPORTED, SUPPORTED_IMAGE_PROTOCOLS
+from app.services.providers import SUPPORTED_CHAT_PROTOCOLS, SUPPORTED_EMBEDDING_PROTOCOLS, SUPPORTED_IMAGE_PROTOCOLS
 
 router = APIRouter(prefix="/channels", tags=["admin-channels"])
 
-_EMBEDDING_PROTOCOLS = [p for p in SUPPORTED if p != "anthropic"]
-
-
 def _validate_protocol(provider_type: str) -> str:
     protocol = (provider_type or "").lower().strip()
-    if protocol not in SUPPORTED:
+    if protocol not in SUPPORTED_CHAT_PROTOCOLS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"unsupported upstream protocol {provider_type!r}; supported: {', '.join(SUPPORTED)}",
+            f"unsupported upstream protocol {provider_type!r}; supported: {', '.join(SUPPORTED_CHAT_PROTOCOLS)}",
         )
     return protocol
 
@@ -31,8 +28,8 @@ def _allowed_protocols_for_kind(kind: str) -> list[str]:
     if kind == "image":
         return SUPPORTED_IMAGE_PROTOCOLS
     if kind == "embedding":
-        return _EMBEDDING_PROTOCOLS
-    return SUPPORTED
+        return SUPPORTED_EMBEDDING_PROTOCOLS
+    return SUPPORTED_CHAT_PROTOCOLS
 
 
 async def _validate_inheriting_models(db: AsyncSession, channel_id: int, protocol: str) -> None:

@@ -32,6 +32,17 @@ def openai_chat_token_limit(payload: dict[str, Any] | None, default: Any = None)
     return default
 
 
+def anthropic_messages_request_error(payload: dict[str, Any]) -> str | None:
+    if "max_completion_tokens" in payload:
+        return "max_completion_tokens is not valid for Anthropic Messages; use max_tokens"
+    if "max_tokens" not in payload:
+        return "missing max_tokens"
+    value = payload.get("max_tokens")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return "max_tokens must be a positive integer"
+    return None
+
+
 def anthropic_to_openai_payload(payload: dict[str, Any]) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     system = payload.get("system")

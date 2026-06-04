@@ -60,7 +60,7 @@ function upstreamSample(protocol: string, kind: string, m: string): string | nul
       "POST {base_url}/v1/chat/completions",
       "Authorization: Bearer <api-key>",
       "",
-      JSON.stringify({ model, messages: [{ role: "user", content: "Hello" }], stream: false }, null, 2),
+      JSON.stringify({ model, messages: [{ role: "user", content: "Hello" }], max_tokens: 1024, stream: false }, null, 2),
     ].join("\n");
   }
   if (protocol === "azure") {
@@ -83,7 +83,7 @@ function upstreamSample(protocol: string, kind: string, m: string): string | nul
       `POST {base_url}/openai/deployments/${model}/chat/completions?api-version=${apiVer}`,
       "api-key: <api-key>",
       "",
-      JSON.stringify({ messages: [{ role: "user", content: "Hello" }], stream: false }, null, 2),
+      JSON.stringify({ messages: [{ role: "user", content: "Hello" }], max_tokens: 1024, stream: false }, null, 2),
     ].join("\n");
   }
   if (protocol === "anthropic") {

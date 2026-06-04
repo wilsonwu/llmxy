@@ -9,14 +9,15 @@ from app.db.session import get_db
 from app.models import Channel, Model, User
 from app.schemas import ModelIn, ModelOut
 from app.services.envoy.config import regenerate_all_running
-from app.services.providers import SUPPORTED, SUPPORTED_IMAGE_PROTOCOLS, channel_locks_adapter
+from app.services.providers import (
+    SUPPORTED_CHAT_PROTOCOLS,
+    SUPPORTED_EMBEDDING_PROTOCOLS,
+    SUPPORTED_IMAGE_PROTOCOLS,
+    adapter_family,
+    channel_locks_adapter,
+)
 
 router = APIRouter(prefix="/models", tags=["admin-models"])
-
-# Protocols whose adapters actually serve embeddings. Anthropic has no
-# embeddings API, so it's excluded for embedding models.
-_EMBEDDING_PROTOCOLS = [p for p in SUPPORTED if p != "anthropic"]
-
 
 async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
     """Validate the optional per-model upstream protocol override against the
@@ -27,19 +28,19 @@ async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"channel {req.channel_id} not found")
     channel_protocol = (channel.provider_type or "").lower()
     override = (req.upstream_protocol or "").lower()
-    if override and channel_locks_adapter(channel_protocol) and override != channel_protocol:
+    if override and channel_locks_adapter(channel_protocol) and adapter_family(override) != adapter_family(channel_protocol):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"model upstream_protocol {override!r} cannot override provider-specific channel protocol {channel_protocol!r}; "
-            "clear the override to inherit the channel protocol",
+            "clear the override to inherit the channel protocol or choose a protocol in the same family",
         )
     proto = override or channel_protocol
     if req.kind == "image":
         allowed = SUPPORTED_IMAGE_PROTOCOLS
     elif req.kind == "embedding":
-        allowed = _EMBEDDING_PROTOCOLS
+        allowed = SUPPORTED_EMBEDDING_PROTOCOLS
     else:
-        allowed = SUPPORTED
+        allowed = SUPPORTED_CHAT_PROTOCOLS
     if proto not in allowed:
         source = "model override" if req.upstream_protocol else "inherited channel protocol"
         raise HTTPException(

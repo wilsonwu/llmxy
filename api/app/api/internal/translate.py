@@ -22,7 +22,13 @@ from app.models import ApiKey, Channel, Model, RoutePolicy, RouteScope, UsageLog
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user
 from app.services.image_relay import ImageRelayError, execute_image_relay
-from app.services.protocols.chat import OpenAIToAnthropicStream, anthropic_to_openai_payload, openai_to_anthropic_response, route_exposes
+from app.services.protocols.chat import (
+    OpenAIToAnthropicStream,
+    anthropic_messages_request_error,
+    anthropic_to_openai_payload,
+    openai_to_anthropic_response,
+    route_exposes,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/translate", tags=["internal"])
@@ -333,6 +339,8 @@ async def messages(
             payload = await request.json()
         except Exception:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid json body")
+        if err := anthropic_messages_request_error(payload):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err)
         openai_payload = anthropic_to_openai_payload(payload)
         stream = bool(payload.get("stream"))
         started = time.time()

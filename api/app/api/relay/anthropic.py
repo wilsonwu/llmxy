@@ -17,6 +17,7 @@ from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user, has_quota
 from app.services.protocols.chat import (
     OpenAIToAnthropicStream,
+    anthropic_messages_request_error,
     anthropic_to_openai_payload,
     openai_to_anthropic_response,
 )
@@ -49,6 +50,8 @@ async def messages(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
     if not payload.get("messages"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing messages")
+    if err := anthropic_messages_request_error(payload):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, err)
 
     openai_payload = anthropic_to_openai_payload(payload)
     stream = bool(payload.get("stream"))

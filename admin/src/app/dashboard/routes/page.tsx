@@ -125,6 +125,7 @@ export default function RoutesPage() {
   const modelLabel = (id: number) => modelById(id)?.code || `#${id}`;
   const modalityTone = (m: string) => m === "image" ? "purple" : m === "embedding" ? "brand" : "info";
   const protocolTone = (p: string) => p === "anthropic" ? "purple" : p === "gemini" ? "warning" : p === "azure" ? "brand" : p === "openai" ? "success" : "neutral";
+  const protocolLabel = (p: string) => p;
   function routeProtocols(r: R): ExposedProtocol[] {
     const raw = r.exposed_protocols?.length ? r.exposed_protocols : ["openai"];
     const normalized = Array.from(new Set(raw.filter((p): p is ExposedProtocol => p === "openai" || p === "anthropic")));
@@ -136,7 +137,7 @@ export default function RoutesPage() {
   };
   const modelOptionLabel = (m: M) => {
     const disabled = m.enabled === false ? " · disabled" : "";
-    return `${m.code} — ${m.display_name} · upstream ${effectiveProtocol(m)} · ${m.upstream_model}${disabled}`;
+    return `${m.code} — ${m.display_name} · upstream ${protocolLabel(effectiveProtocol(m))} · ${m.upstream_model}${disabled}`;
   };
 
   const renderTargetSummary = (r: R) =>
@@ -150,7 +151,7 @@ export default function RoutesPage() {
       return (
         <span key={i} className="mr-2 inline-flex items-center gap-1" title={model ? `Auto upstream adapter: ${protocol}; model: ${model.upstream_model}` : undefined}>
           <span>{modelLabel(t.model_id)}({extras.join("/")})</span>
-          <Badge tone={protocolTone(protocol)}>{protocol}</Badge>
+          <Badge tone={protocolTone(protocol)}>{protocolLabel(protocol)}</Badge>
         </span>
       );
     });
