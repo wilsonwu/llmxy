@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     ENVOY_EXT_PROC_MAX_BYTES: int = 1024 * 1024  # 1 MiB
     # ext_proc call timeout. Should comfortably exceed p99 of route selection
     # (cache lookup + DB route/target lookup + optional smart classifier).
-    ENVOY_EXT_PROC_TIMEOUT: str = "5s"
+    ENVOY_EXT_PROC_TIMEOUT: str = "15s"
     # Background health monitor: probe /ready on every active instance and
     # update last_health_at. After this many consecutive failures, flip
     # status=error and write last_error. 0 disables the monitor.

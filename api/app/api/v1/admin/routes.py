@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,8 +11,10 @@ from app.db.session import get_db
 from app.models import Model, RoutePolicy, RouteScope, RouteStrategy, User
 from app.schemas import RoutePolicyIn, RoutePolicyOut
 from app.services.envoy.config import regenerate_all_running
+from app.services.providers.smart_embedding import warmup_route_exemplars
 
 router = APIRouter(prefix="/routes", tags=["admin-routes"])
+log = logging.getLogger(__name__)
 
 VALID_MODALITIES = {"chat", "embedding", "image"}
 VALID_EXPOSED_PROTOCOLS = {"openai", "anthropic"}
@@ -88,6 +92,10 @@ async def create_route(req: RoutePolicyIn, _: User = Depends(require_admin), db:
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    try:
+        await warmup_route_exemplars(row, db)
+    except Exception as e:
+        log.warning("smart route warmup failed after create route %s: %s", row.user_facing_model, e)
     await regenerate_all_running(db)
     return row
 
@@ -106,6 +114,10 @@ async def update_route(rid: int, req: RoutePolicyIn, _: User = Depends(require_a
         row.smart_embedding_version = (row.smart_embedding_version or 0) + 1
     await db.commit()
     await db.refresh(row)
+    try:
+        await warmup_route_exemplars(row, db)
+    except Exception as e:
+        log.warning("smart route warmup failed after update route %s: %s", row.user_facing_model, e)
     await regenerate_all_running(db)
     return row
 

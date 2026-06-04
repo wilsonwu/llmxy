@@ -18,7 +18,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from app.models import Channel, Model, RoutePolicy
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Channel, Model, RoutePolicy, RouteStrategy
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +175,72 @@ async def _load_or_build_exemplars(
         except Exception:
             pass
     return out
+
+
+async def warmup_route_exemplars(policy: RoutePolicy, db: AsyncSession) -> bool:
+    strategy = getattr(policy, "strategy", None)
+    strategy_value = getattr(strategy, "value", strategy)
+    if (
+        not getattr(policy, "enabled", True)
+        or strategy_value != RouteStrategy.smart.value
+        or not policy.smart_embedding_model_id
+        or not (policy.smart_exemplars_jsonb or [])
+    ):
+        return False
+    model = await db.get(Model, int(policy.smart_embedding_model_id))
+    if not model or not model.enabled or model.kind != "embedding":
+        log.warning(
+            "smart route warmup skipped for %s: embedding model %s unavailable",
+            policy.user_facing_model,
+            policy.smart_embedding_model_id,
+        )
+        return False
+    channel = await db.get(Channel, model.channel_id)
+    if not channel or not channel.enabled:
+        log.warning(
+            "smart route warmup skipped for %s: embedding channel %s unavailable",
+            policy.user_facing_model,
+            model.channel_id,
+        )
+        return False
+    started = time.time()
+    exemplars = await _load_or_build_exemplars(policy, model, channel)
+    elapsed_ms = int((time.time() - started) * 1000)
+    if exemplars:
+        total = sum(len(v) for v in exemplars.values())
+        log.info(
+            "smart route warmup ready policy=%s model=%s labels=%d vectors=%d latency_ms=%d",
+            policy.user_facing_model,
+            model.code,
+            len(exemplars),
+            total,
+            elapsed_ms,
+        )
+        return True
+    log.warning("smart route warmup produced no exemplars for %s", policy.user_facing_model)
+    return False
+
+
+async def warmup_all_smart_routes(db: AsyncSession) -> tuple[int, int]:
+    rows = (
+        await db.execute(
+            select(RoutePolicy).where(
+                RoutePolicy.enabled.is_(True),
+                RoutePolicy.strategy == RouteStrategy.smart,
+                RoutePolicy.smart_embedding_model_id.is_not(None),
+            )
+        )
+    ).scalars().all()
+    ready = 0
+    for policy in rows:
+        try:
+            if await warmup_route_exemplars(policy, db):
+                ready += 1
+        except Exception as e:
+            log.warning("smart route warmup failed for %s: %s", policy.user_facing_model, e)
+    if rows:
+        log.info("smart route warmup complete: ready=%d total=%d", ready, len(rows))
+    return ready, len(rows)
 
 
 async def _embed_prompt_cached(

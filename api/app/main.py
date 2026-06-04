@@ -207,6 +207,15 @@ async def startup() -> None:
     except Exception as e:
         logging.warning("seed failed (continuing): %s", e)
 
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.providers.smart_embedding import warmup_all_smart_routes
+
+        async with AsyncSessionLocal() as s:
+            await warmup_all_smart_routes(s)
+    except Exception as e:
+        logging.warning("smart route warmup failed (continuing): %s", e)
+
     # Start ALS gRPC server for envoy access logs (usage + billing ingest).
     # Single plaintext listener serves both local and remote envoys.
     try:

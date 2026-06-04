@@ -118,6 +118,12 @@ async def start(db: AsyncSession, inst: EnvoyInstance) -> dict[str, Any]:
     if inst.status == EnvoyStatus.running and _pid_alive(inst.pid):
         return {"status": "running", "pid": inst.pid}
 
+    try:
+        from app.services.providers.smart_embedding import warmup_all_smart_routes
+        await warmup_all_smart_routes(db)
+    except Exception as e:
+        log.warning("smart route warmup before envoy start failed: %s", e)
+
     # Refuse if something else already holds either local port — otherwise
     # envoy would crash with EADDRINUSE and we'd leave the DB in a weird
     # half-state. Check both listener and admin; the admin bind happens from
