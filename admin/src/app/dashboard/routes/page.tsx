@@ -61,7 +61,7 @@ const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
   smart: {
     title: "smart — pick by prompt content",
     body:
-      "Pick one deciding mechanism: either rules (zero-cost, ordered, built-in presets) or an embedding classifier (semantic match against exemplar prompts). Unmatched requests fall through to the default label.",
+      "Pick one deciding mechanism: either rules (zero-cost, ordered, built-in presets) or an embedding classifier (semantic match against exemplar prompts). Each resolved label can route to one or more weighted targets; unmatched requests fall through to the default label.",
   },
 };
 
@@ -153,7 +153,10 @@ export default function RoutesPage() {
       const extras: string[] = [];
       if (r.strategy === "weighted") extras.push(`w${t.weight}`);
       if (r.strategy === "fallback") extras.push(`o${t.fallback_order}`);
-      if (r.strategy === "smart") extras.push(t.label ? `[${t.label}]` : "[no-label]");
+      if (r.strategy === "smart") {
+        extras.push(t.label ? `[${t.label}]` : "[no-label]");
+        extras.push(`w${t.weight}`);
+      }
       return (
         <span key={i} className="mr-2 inline-flex items-center gap-1" title={model ? `Upstream protocol: ${protocol}; connector: ${connector}; model: ${model.upstream_model}` : undefined}>
           <span>{modelLabel(t.model_id)}({extras.join("/")})</span>
@@ -283,13 +286,19 @@ export default function RoutesPage() {
           setEditing({ ...e, smart_rules_jsonb: [...(e.smart_rules_jsonb || []), rule] });
         };
 
-        const LabelSelect = ({ value, onChange, options, w = "w-40", emptyText = "— pick label —" }:
+        const LabelSelect = ({ value, onChange, options, w = "w-full", emptyText = "— pick label —" }:
           { value: string; onChange: (v: string) => void; options: string[]; w?: string; emptyText?: string }) => (
-          <select className={`input ${w}`} value={value} onChange={(ev) => onChange(ev.target.value)}>
+          <select className={`input min-w-0 max-w-full ${w}`} value={value} onChange={(ev) => onChange(ev.target.value)}>
             <option value="">{emptyText}</option>
             {options.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         );
+
+        const targetRowClass = e.strategy === "smart"
+          ? "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_minmax(0,10rem)_auto] sm:items-center"
+          : e.strategy === "weighted"
+            ? "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center"
+            : "grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center";
 
         const renderTargets = () => (
           <div>
@@ -307,7 +316,7 @@ export default function RoutesPage() {
             </div>
             {e.strategy === "smart" && (
               <p className="mb-2 text-xs text-gray-500">
-                Pick a label for each target — labels come from your rules and exemplars below. The <code>default</code> label catches anything that doesn&apos;t match.
+                Pick a label for each target — multiple targets may share a label and will be balanced by weight. The <code>default</code> label catches anything that doesn&apos;t match.
               </p>
             )}
             {e.targets_jsonb.map((t, i) => {
@@ -317,8 +326,8 @@ export default function RoutesPage() {
               const isModelOverride = Boolean(selected?.upstream_protocol);
               return (
                 <div key={i} className="mb-2 rounded border border-gray-200 bg-white p-2">
-                  <div className="flex items-center gap-2">
-                    <select className="input flex-1" value={t.model_id} onChange={(ev) => {
+                  <div className={targetRowClass}>
+                    <select className="input w-full min-w-0" value={t.model_id} onChange={(ev) => {
                       const v = [...e.targets_jsonb]; v[i] = { ...t, model_id: +ev.target.value };
                       setEditing({ ...e, targets_jsonb: v });
                     }}>
@@ -326,15 +335,15 @@ export default function RoutesPage() {
                         <option key={m.id} value={m.id}>{modelOptionLabel(m)}</option>
                       ))}
                     </select>
-                    {e.strategy === "weighted" && (
-                      <input className="input w-20" type="number" placeholder="weight" value={t.weight}
+                    {(e.strategy === "weighted" || e.strategy === "smart") && (
+                      <input className="input w-full min-w-0" type="number" min={0} placeholder="weight" value={t.weight}
                         onChange={(ev) => {
                           const v = [...e.targets_jsonb]; v[i] = { ...t, weight: +ev.target.value };
                           setEditing({ ...e, targets_jsonb: v });
                         }} />
                     )}
                     {e.strategy === "fallback" && (
-                      <input className="input w-20" type="number" placeholder="order" value={t.fallback_order}
+                      <input className="input w-full min-w-0" type="number" placeholder="order" value={t.fallback_order}
                         onChange={(ev) => {
                           const v = [...e.targets_jsonb]; v[i] = { ...t, fallback_order: +ev.target.value };
                           setEditing({ ...e, targets_jsonb: v });
@@ -347,7 +356,7 @@ export default function RoutesPage() {
                           setEditing({ ...e, targets_jsonb: arr });
                         }} />
                     )}
-                    <button className="btn-danger" onClick={() => {
+                    <button className="btn-danger w-full sm:w-auto" onClick={() => {
                       const v = e.targets_jsonb.filter((_, j) => j !== i);
                       setEditing({ ...e, targets_jsonb: v });
                     }}>×</button>

@@ -266,8 +266,7 @@ async def _smart_pick(
     if chosen_label:
         matched = [(m, c, t) for m, c, t in pairs if _target_label(t) == chosen_label]
         if matched:
-            matched.sort(key=lambda x: int(x[2].get("fallback_order", 0)))
-            return [(m, c) for m, c, _ in matched], chosen_label, embedding_usage
+            return _weighted_order(matched), chosen_label, embedding_usage
 
     return _weighted_order(pairs), chosen_label, embedding_usage
 
