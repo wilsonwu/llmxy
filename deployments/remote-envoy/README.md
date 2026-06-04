@@ -15,7 +15,10 @@ client certificates.
 1. **Control plane** has `XDS_AUTH_TOKEN` and `CONTROL_PLANE_PUBLIC_HOST`
    set in its env. The token goes into envoy's gRPC metadata as
    `x-llmxy-token`; `CONTROL_PLANE_PUBLIC_HOST` is the first address a
-   remote envoy will try.
+   remote envoy will try. Remote envoy must be able to reach that host on
+   the API translator HTTP port (`8000`), ALS (`8002`), xDS (`8003`), and
+   ext_proc (`8004`). If you run the API manually, bind it to a non-loopback
+   interface, for example `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`.
 2. **Create a remote instance** in the admin UI (Envoy → New instance →
    mode = remote). For Kubernetes, the generated Service exposes NodePort
    `30000` for client traffic and `30001` for admin. For Docker host-network
@@ -84,3 +87,4 @@ envoys carry the new token, drop the old one from the control plane env.
 | envoy logs `gRPC config stream closed: 7 unknown remote node ...` | Instance was deleted in control plane, or `node.id` was hand-edited |
 | `no healthy upstream` on `/v1/...` | Channel disabled, or upstream API key invalid |
 | Admin UI shows offline despite envoy up | `CONTROL_PLANE_PUBLIC_HOST` isn't reachable from envoy's network |
+| `/v1/...` returns `upstream connect error ... Connection refused` for `translator` | The API HTTP port (`CONTROL_PLANE_PUBLIC_HOST:8000`) is not reachable from remote envoy. Check that uvicorn is bound to `0.0.0.0` and that firewalls/security groups expose port `8000`. |
