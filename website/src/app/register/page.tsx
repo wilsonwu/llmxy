@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, getToken, setToken } from "@/lib/api";
+import { Chrome, Github } from "lucide-react";
+import { api, getToken, oauthLoginUrl, setToken } from "@/lib/api";
 
 export default function RegisterPage() {
   const [email, setEmail] = useState("");
@@ -43,6 +44,16 @@ export default function RegisterPage() {
         </div>
         {err && <p className="text-sm text-red-600">{err}</p>}
         <button className="btn-primary w-full">Sign up free</button>
+        <div className="grid gap-2 border-t border-gray-100 pt-4">
+          <a className="btn-outline w-full" href={oauthLoginUrl("google")}>
+            <Chrome className="h-4 w-4" aria-hidden="true" />
+            Sign up with Google
+          </a>
+          <a className="btn-outline w-full" href={oauthLoginUrl("github")}>
+            <Github className="h-4 w-4" aria-hidden="true" />
+            Sign up with GitHub
+          </a>
+        </div>
       </form>
     </div>
   );

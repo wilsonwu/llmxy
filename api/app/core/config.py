@@ -26,10 +26,19 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     API_PUBLIC_URL: str = "http://localhost:8000"
+    WEBSITE_PUBLIC_URL: str = "http://localhost:3000"
     JWT_SECRET: str = "dev-secret-change-me"
     JWT_ALG: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
+
+    # OAuth login. Callback URLs default to API_PUBLIC_URL; set
+    # OAUTH_CALLBACK_BASE_URL when the externally registered API origin differs.
+    OAUTH_CALLBACK_BASE_URL: str = ""
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    GITHUB_OAUTH_CLIENT_ID: str = ""
+    GITHUB_OAUTH_CLIENT_SECRET: str = ""
 
     # Seed admin
     SEED_ADMIN_EMAIL: str = "admin@llmxy.local"

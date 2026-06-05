@@ -3,6 +3,8 @@ export const API_BASE =
 
 const TOKEN_KEY = "llmxy_token";
 
+export type OAuthProvider = "google" | "github";
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
@@ -54,3 +56,7 @@ export async function api<T = any>(
 }
 
 export const fetcher = (path: string) => api(path);
+
+export function oauthLoginUrl(provider: OAuthProvider): string {
+  return `${API_BASE}/api/v1/auth/oauth/${provider}/login`;
+}
