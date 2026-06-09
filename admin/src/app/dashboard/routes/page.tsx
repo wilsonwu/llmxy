@@ -549,7 +549,7 @@ export default function RoutesPage() {
                   const mod = ev.target.value as R["modality"];
                   setEditing({ ...e, modality: mod, targets_jsonb: [], exposed_protocols: mod === "chat" ? routeProtocols(e).filter((p) => p === "openai.chat" || p === "openai.responses" || p === "anthropic.messages") : [mod === "image" ? "openai.images" : "openai.embeddings"] });
                 }}>
-                <option value="chat">chat</option>
+                <option value="chat">chat (text generation)</option>
                 <option value="embedding">embedding</option>
                 <option value="image">image</option>
               </select>

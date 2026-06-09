@@ -229,8 +229,8 @@ class Model(Base):
     display_name: Mapped[str] = mapped_column(String(128))
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
     upstream_model: Mapped[str] = mapped_column(String(128))  # real upstream model name
-    # "chat" (default) | "embedding" | "image". Smart-routing exemplar
-    # embeddings use kind=embedding. Image models bill via pricing_jsonb.
+    # Capability kind: "chat" (text generation) | "embedding" | "image".
+    # Request/response API variants such as openai.responses live in upstream_protocol.
     kind: Mapped[str] = mapped_column(String(16), default="chat", nullable=False)
     # Per-model upstream semantic protocol override. NULL falls back to the
     # channel's provider_type. The channel connector still controls URL/auth

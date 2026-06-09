@@ -16,6 +16,11 @@ from app.services.providers.openai_compat import (
     should_retry_with_max_tokens,
     should_retry_with_max_completion_tokens,
 )
+from app.services.protocols.openai_responses import (
+    openai_chat_to_responses_payload,
+    responses_response_to_openai_chat,
+    responses_sse_to_openai_chat_sse,
+)
 
 
 class AzureOpenAIAdapter:
@@ -57,6 +62,17 @@ class AzureOpenAIAdapter:
             base = base + "/openai"
         ver = api_version or settings.AZURE_OPENAI_API_VERSION
         return f"{base}/deployments/{deployment}{path}?api-version={ver}"
+
+    def _responses_url(self, channel: Channel, api_version: str | None = None) -> str:
+        base = channel.base_url.rstrip("/")
+        if base.endswith("/openai/v1"):
+            root = base
+        elif base.endswith("/openai"):
+            root = f"{base}/v1"
+        else:
+            root = f"{base}/openai/v1"
+        ver = api_version or settings.AZURE_OPENAI_RESPONSES_API_VERSION
+        return f"{root}/responses?api-version={ver}"
 
     async def chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
         body = normalize_chat_payload_for_protocol(
@@ -155,6 +171,39 @@ class AzureOpenAIAdapter:
                         yield raw
                         return
                     async for chunk in r.aiter_raw():
+                        yield chunk
+
+        return ChatResult(status=200, stream=gen())
+
+    async def responses_from_chat(self, channel: Channel, upstream_model: str, payload: dict, stream: bool) -> ChatResult:
+        body = openai_chat_to_responses_payload(payload)
+        body["model"] = upstream_model
+        body["stream"] = stream
+        url = self._responses_url(channel)
+        headers = self._headers(channel)
+
+        if not stream:
+            async with httpx.AsyncClient(timeout=settings.UPSTREAM_TIMEOUT) as cli:
+                r = await cli.post(url, json=body, headers=headers)
+                try:
+                    data = r.json()
+                except Exception:
+                    data = {"error": {"message": r.text}}
+                if r.status_code != 200:
+                    return ChatResult(status=r.status_code, body=data)
+                out = responses_response_to_openai_chat(data, upstream_model)
+                usage = out.get("usage") or {}
+                return ChatResult(
+                    status=200,
+                    body=out,
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                )
+
+        async def gen() -> AsyncIterator[bytes]:
+            async with httpx.AsyncClient(timeout=None) as cli:
+                async with cli.stream("POST", url, json=body, headers=headers) as r:
+                    async for chunk in responses_sse_to_openai_chat_sse(r.aiter_raw(), model=upstream_model):
                         yield chunk
 
         return ChatResult(status=200, stream=gen())

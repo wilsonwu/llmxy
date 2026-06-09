@@ -31,7 +31,7 @@ _CONNECTORS: dict[str, ProviderAdapter] = {
 
 _CONNECTOR_PROTOCOLS: dict[str, set[str]] = {
     "openai": {OPENAI_CHAT, OPENAI_RESPONSES, OPENAI_EMBEDDINGS, OPENAI_IMAGES},
-    "azure_openai": {OPENAI_CHAT, OPENAI_EMBEDDINGS, OPENAI_IMAGES},
+    "azure_openai": {OPENAI_CHAT, OPENAI_RESPONSES, OPENAI_EMBEDDINGS, OPENAI_IMAGES},
     "anthropic": {ANTHROPIC_MESSAGES},
     "gemini": {GEMINI_GENERATE_CONTENT, GEMINI_EMBEDDINGS, GEMINI_IMAGES},
 }
@@ -110,6 +110,9 @@ def channel_connector(channel: Any) -> str:
     raw_connector = getattr(channel, "connector_type", None)
     connector = normalize_connector(raw_connector)
     if raw_provider in {"azure", "azure_openai", "azure-openai"} and connector == "openai":
+        return "azure_openai"
+    base_url = (getattr(channel, "base_url", None) or "").lower()
+    if connector == "openai" and ".openai.azure.com" in base_url:
         return "azure_openai"
     return normalize_connector(raw_connector or raw_provider or "openai")
 

@@ -17,7 +17,7 @@ const UPSTREAM_PROTOCOLS = [
 
 const UPSTREAM_CONNECTORS = [
   { id: "openai", protocols: ["openai.chat", "openai.responses", "openai.embeddings", "openai.images"], label: "OpenAI-compatible", hint: "Bearer auth with /v1 paths; works for OpenAI and compatible gateways", baseUrl: "https://api.openai.com/v1" },
-  { id: "azure_openai", protocols: ["openai.chat", "openai.embeddings", "openai.images"], label: "Azure OpenAI", hint: "Azure deployment paths, api-key header, and api-version query", baseUrl: "https://{resource}.openai.azure.com" },
+  { id: "azure_openai", protocols: ["openai.chat", "openai.responses", "openai.embeddings", "openai.images"], label: "Azure OpenAI", hint: "Azure deployment paths or Azure v1 paths, api-key header, and api-version query", baseUrl: "https://{resource}.openai.azure.com" },
   { id: "anthropic", protocols: ["anthropic.messages"], label: "Anthropic", hint: "x-api-key auth with /v1/messages", baseUrl: "https://api.anthropic.com" },
   { id: "gemini", protocols: ["gemini.generate_content", "gemini.embeddings", "gemini.images"], label: "Google Gemini", hint: "key query parameter with Gemini REST paths", baseUrl: "https://generativelanguage.googleapis.com" },
 ];

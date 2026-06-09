@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     # Azure OpenAI default api-version (channel-level override planned via extra config)
     AZURE_OPENAI_API_VERSION: str = "2024-10-21"
+    AZURE_OPENAI_RESPONSES_API_VERSION: str = "preview"
     # Image generation (gpt-image-1 / dall-e) on Azure is only exposed on a
     # newer preview api-version than the chat GA one — the GA version returns
     # 404 "Resource not found" for /images/generations on gpt-image-1 deployments.

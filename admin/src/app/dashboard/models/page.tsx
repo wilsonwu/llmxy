@@ -121,6 +121,14 @@ function upstreamSample(protocol: string, connector: string, kind: string, m: st
     ].join("\n");
   }
   if (protocol === "openai.responses") {
+    if (connector === "azure_openai") {
+      return [
+        "POST {base_url}/openai/v1/responses?api-version=preview",
+        "api-key: <api-key>",
+        "",
+        JSON.stringify({ model, input: "Hello", max_output_tokens: 1024, stream: false }, null, 2),
+      ].join("\n");
+    }
     return [
       "POST {base_url}/v1/responses",
       "Authorization: Bearer <api-key>",
@@ -316,7 +324,7 @@ export default function ModelsPage() {
                 <input className="input w-full" value={editing.upstream_model} onChange={(e) => setEditing({ ...editing, upstream_model: e.target.value })} /></div>
               <div><label className="label">kind</label>
                 <select className="input w-full" value={editing.kind} onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>
-                  <option value="chat">chat (chat/completions)</option>
+                  <option value="chat">chat (text generation)</option>
                   <option value="embedding">embedding (embeddings)</option>
                   <option value="image">image (images/generations)</option>
                 </select></div>

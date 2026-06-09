@@ -149,7 +149,7 @@ class ModelIn(BaseModel):
     display_name: str
     channel_id: int
     upstream_model: str
-    kind: str = "chat"  # "chat" | "embedding" | "image"
+    kind: str = "chat"  # capability: chat(text generation) | embedding | image; not protocol variant
     upstream_protocol: Optional[str] = None  # per-model semantic protocol override; None = inherit channel provider_type
     prompt_rate: int = 0  # micro-cent / 1K tokens
     completion_rate: int = 0

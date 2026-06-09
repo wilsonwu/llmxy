@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from typing import AsyncIterator
 
 import httpx
@@ -177,6 +178,8 @@ class OpenAIAdapter:
                     data = r.json()
                 except Exception:
                     data = {"error": {"message": r.text}}
+                if _should_fallback_responses_to_chat(r.status_code, data):
+                    return await self.chat(channel, upstream_model, payload, stream=False)
                 if r.status_code != 200:
                     return ChatResult(status=r.status_code, body=data)
                 out = responses_response_to_openai_chat(data, upstream_model)
@@ -191,6 +194,20 @@ class OpenAIAdapter:
         async def gen() -> AsyncIterator[bytes]:
             async with httpx.AsyncClient(timeout=None) as cli:
                 async with cli.stream("POST", url, json=body, headers=headers) as r:
+                    if r.status_code >= 400:
+                        raw = await r.aread()
+                        try:
+                            data = json.loads(raw.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            data = {"error": {"message": raw.decode("utf-8", errors="ignore")}}
+                        if _should_fallback_responses_to_chat(r.status_code, data):
+                            fallback = await self.chat(channel, upstream_model, payload, stream=True)
+                            if fallback.stream is not None:
+                                async for chunk in fallback.stream:
+                                    yield chunk
+                                return
+                        yield raw
+                        return
                     async for chunk in responses_sse_to_openai_chat_sse(r.aiter_raw(), model=upstream_model):
                         yield chunk
 
@@ -221,3 +238,25 @@ class OpenAIAdapter:
             return 504, {"error": {"message": "upstream image generation timed out", "type": "timeout"}}
         except Exception as e:  # network/DNS/etc — caller refunds the hold
             return 502, {"error": {"message": str(e), "type": "upstream_error"}}
+
+
+def _should_fallback_responses_to_chat(status_code: int, body: Any) -> bool:
+    if status_code not in {400, 404, 405}:
+        return False
+    try:
+        text = json.dumps(body, ensure_ascii=False).lower()
+    except TypeError:
+        text = str(body).lower()
+    if status_code in {404, 405}:
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "responses",
+            "/responses",
+            "resource not found",
+            "not supported",
+            "unsupported",
+            "unknown endpoint",
+        )
+    )
