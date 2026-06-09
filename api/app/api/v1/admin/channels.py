@@ -66,8 +66,8 @@ async def _validate_channel_models(db: AsyncSession, channel_id: int, protocol: 
     ).scalars().all()
     invalid: list[str] = []
     for m in rows:
-        model_protocol = normalize_protocol(m.upstream_protocol or protocol)
         kind = m.kind or "chat"
+        model_protocol = normalize_protocol(m.upstream_protocol or protocol, kind=kind)
         if model_protocol not in _allowed_protocols_for_kind(kind):
             invalid.append(f"{m.code} ({kind} / {model_protocol})")
         elif not connector_supports_protocol(connector, model_protocol) or not connector_supports_kind(connector, kind):

@@ -29,6 +29,11 @@ from app.services.protocols.chat import (
     openai_to_anthropic_response,
     route_exposes,
 )
+from app.services.protocols.openai_responses import (
+    openai_chat_sse_to_responses_sse,
+    openai_chat_to_responses_response,
+    responses_to_openai_chat_payload,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/translate", tags=["internal"])
@@ -52,7 +57,7 @@ async def list_models():
             "data": [
                 {"id": r.user_facing_model, "object": "model", "owned_by": "llmxy"}
                 for r in rows
-                if route_exposes(r, "openai")
+                if route_exposes(r, "openai.chat") or route_exposes(r, "openai.responses")
             ],
         }
 
@@ -253,7 +258,7 @@ async def chat_completions(
                 last_err = f"connector {connector} does not support protocol {protocol}"
                 continue
             try:
-                result = await adapter.chat(channel, upstream_model, payload, stream=stream)
+                result = await providers.run_chat(adapter, protocol, channel, upstream_model, payload, stream=stream)
             except Exception as e:
                 log.warning("translator adapter error: %s", e)
                 last_err = str(e)
@@ -308,6 +313,134 @@ async def chat_completions(
                 classifier_headers=classifier_headers,
             )
             return JSONResponse(result.body)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")
+
+
+@router.post("/v1/responses")
+async def responses(
+    request: Request,
+    x_llmxy_channel_id: str | None = Header(None),
+    x_llmxy_model_id: str | None = Header(None),
+    x_llmxy_user_id: str | None = Header(None),
+    x_llmxy_api_key_id: str | None = Header(None),
+    x_llmxy_user_facing_model: str | None = Header(None),
+    x_llmxy_upstream_model: str | None = Header(None),
+    x_llmxy_upstream_protocol: str | None = Header(None),
+    x_llmxy_connector_type: str | None = Header(None),
+    x_llmxy_chat_chain: str | None = Header(None),
+    x_llmxy_request_id: str | None = Header(None),
+    x_llmxy_resolved_label: str | None = Header(None),
+    x_llmxy_classifier_model_id: str | None = Header(None),
+    x_llmxy_classifier_upstream_model: str | None = Header(None),
+    x_llmxy_classifier_prompt_tokens: str | None = Header(None),
+    x_llmxy_classifier_latency_ms: str | None = Header(None),
+    x_llmxy_classifier_status: str | None = Header(None),
+):
+    from app.db.session import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        candidates = await _load_chat_candidates(
+            db,
+            chain_header=x_llmxy_chat_chain,
+            fallback_model_id=x_llmxy_model_id,
+            fallback_channel_id=x_llmxy_channel_id,
+            fallback_upstream_model=x_llmxy_upstream_model,
+        )
+
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid json body")
+        chat_payload = responses_to_openai_chat_payload(payload)
+        stream = bool(payload.get("stream"))
+        started = time.time()
+        request_id = x_llmxy_request_id or f"req-{uuid.uuid4().hex[:16]}"
+        user, api_key, header_model = await _billing_context(
+            db, user_id=x_llmxy_user_id, api_key_id=x_llmxy_api_key_id, model_id=x_llmxy_model_id
+        )
+        classifier_headers = {
+            "model_id": x_llmxy_classifier_model_id,
+            "upstream_model": x_llmxy_classifier_upstream_model,
+            "prompt_tokens": x_llmxy_classifier_prompt_tokens,
+            "latency_ms": x_llmxy_classifier_latency_ms,
+            "status": x_llmxy_classifier_status,
+        }
+
+        response_model = x_llmxy_user_facing_model or payload.get("model") or x_llmxy_upstream_model or "model"
+        last_err: object = None
+        for candidate_model, channel, upstream_model in candidates:
+            requested_protocol = x_llmxy_upstream_protocol if candidate_model is None else None
+            protocol = providers.resolve_upstream_protocol(candidate_model, channel, requested_protocol)
+            connector = providers.resolve_connector_type(candidate_model, channel, x_llmxy_connector_type if candidate_model is None else None)
+            adapter = providers.get_connector_adapter(connector)
+            if not adapter:
+                last_err = f"no connector adapter for {connector}"
+                continue
+            if not providers.connector_supports_protocol(connector, protocol):
+                last_err = f"connector {connector} does not support protocol {protocol}"
+                continue
+            try:
+                result = await providers.run_chat(adapter, protocol, channel, upstream_model, chat_payload, stream=stream)
+            except Exception as e:
+                log.warning("translator responses adapter error: %s", e)
+                last_err = str(e)
+                continue
+
+            bill_model = candidate_model or header_model
+            if stream:
+                if result.status != 200 or result.stream is None:
+                    last_err = result.body
+                    continue
+
+                async def stream_and_bill() -> AsyncIterator[bytes]:
+                    prompt_tokens = 0
+                    completion_tokens = 0
+
+                    async def source() -> AsyncIterator[bytes]:
+                        nonlocal prompt_tokens, completion_tokens
+                        async for chunk in result.stream:
+                            usage = providers.parse_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens or 0)
+                                completion_tokens = int(usage.get("completion_tokens") or completion_tokens or 0)
+                            yield chunk
+
+                    async for event in openai_chat_sse_to_responses_sse(source(), model=response_model):
+                        yield event
+                    await _bill_chat_relay(
+                        db,
+                        user=user,
+                        api_key=api_key,
+                        model=bill_model,
+                        user_facing_model=x_llmxy_user_facing_model,
+                        upstream_model=upstream_model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        started=started,
+                        request_id=request_id,
+                        resolved_label=x_llmxy_resolved_label,
+                        classifier_headers=classifier_headers,
+                    )
+
+                return StreamingResponse(stream_and_bill(), media_type="text/event-stream")
+
+            if result.status != 200 or not result.body:
+                last_err = result.body
+                continue
+            await _bill_chat_relay(
+                db,
+                user=user,
+                api_key=api_key,
+                model=bill_model,
+                user_facing_model=x_llmxy_user_facing_model,
+                upstream_model=upstream_model,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                started=started,
+                request_id=request_id,
+                resolved_label=x_llmxy_resolved_label,
+                classifier_headers=classifier_headers,
+            )
+            return JSONResponse(openai_chat_to_responses_response(result.body, response_model))
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")
 
 
@@ -376,7 +509,7 @@ async def messages(
                 last_err = f"connector {connector} does not support protocol {protocol}"
                 continue
             try:
-                result = await adapter.chat(channel, upstream_model, openai_payload, stream=stream)
+                result = await providers.run_chat(adapter, protocol, channel, upstream_model, openai_payload, stream=stream)
             except Exception as e:
                 log.warning("translator messages adapter error: %s", e)
                 last_err = str(e)

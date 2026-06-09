@@ -28,6 +28,6 @@ async def list_models(
     data = [
         {"id": r.user_facing_model, "object": "model", "owned_by": "llmxy"}
         for r in rows
-        if route_exposes(r, "openai")
+        if route_exposes(r, "openai.chat") or route_exposes(r, "openai.responses")
     ]
     return {"object": "list", "data": data}

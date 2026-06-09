@@ -14,6 +14,7 @@ from app.api.relay import anthropic as relay_anthropic
 from app.api.relay import embeddings as relay_embeddings
 from app.api.relay import images as relay_images
 from app.api.relay import models_list as relay_models
+from app.api.relay import responses as relay_responses
 from app.api.v1 import api_keys, auth, models as v1_models, orders, plans, subscriptions, transport, usage
 from app.api.v1.admin import channels as admin_channels
 from app.api.v1.admin import envoy as admin_envoy
@@ -172,6 +173,7 @@ app.include_router(admin_envoy.router, prefix=ADMIN)
 
 # OpenAI-compatible relay (root /v1/*)
 app.include_router(relay_chat.router)
+app.include_router(relay_responses.router)
 app.include_router(relay_anthropic.router)
 app.include_router(relay_embeddings.router)
 app.include_router(relay_images.router)

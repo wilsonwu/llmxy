@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 
-type ClientProtocol = "openai" | "anthropic";
+type ClientProtocol = "openai.chat" | "openai.responses" | "anthropic.messages";
 type Model = { id: string; modality?: "chat" | "embedding" | "image"; exposed_protocols?: ClientProtocol[]; strategy: string; target_count: number };
 type Key = { id: number; name: string; key_prefix: string; status: string };
 type EnvoyInst = { name: string; mode: string; listen_port: number; proxy_url: string };
@@ -24,13 +24,27 @@ function tabsForModality(modality?: Model["modality"]): Tab[] {
 }
 
 function routeProtocols(model?: Model): ClientProtocol[] {
-  const raw = model?.exposed_protocols?.length ? model.exposed_protocols : ["openai"];
-  const normalized = Array.from(new Set(raw.filter((p): p is ClientProtocol => p === "openai" || p === "anthropic")));
-  return normalized.length ? normalized : ["openai"];
+  const raw = model?.exposed_protocols?.length ? model.exposed_protocols : ["openai.chat"];
+  const normalized = Array.from(new Set(raw.map(normalizeClientProtocol).filter((p): p is ClientProtocol => Boolean(p))));
+  return normalized.length ? normalized : ["openai.chat"];
+}
+
+function normalizeClientProtocol(protocol: string): ClientProtocol {
+  if (protocol === "openai") return "openai.chat";
+  if (protocol === "anthropic") return "anthropic.messages";
+  if (protocol === "openai.chat" || protocol === "openai.responses" || protocol === "anthropic.messages") return protocol;
+  return "openai.chat";
+}
+
+function protocolLabel(protocol: ClientProtocol) {
+  if (protocol === "openai.chat") return "OpenAI Chat";
+  if (protocol === "openai.responses") return "OpenAI Responses";
+  return "Anthropic Messages";
 }
 
 function endpointForTab(tab: Tab, protocol: ClientProtocol) {
-  if (protocol === "anthropic") return "/v1/messages";
+  if (protocol === "anthropic.messages") return "/v1/messages";
+  if (protocol === "openai.responses") return "/v1/responses";
   if (tab === "embeddings") return "/v1/embeddings";
   if (tab === "image") return "/v1/images/generations";
   return "/v1/chat/completions";
@@ -52,7 +66,7 @@ function buildCurlCommand(url: string, headers: string[], body: Record<string, u
 }
 
 function buildCurl(tab: Tab, protocol: ClientProtocol, base: string, key: string, model: string) {
-  if (protocol === "anthropic") {
+  if (protocol === "anthropic.messages") {
     const body: Record<string, unknown> = { model, max_tokens: 1024, messages: [{ role: "user", content: "Hello!" }] };
     if (tab === "chat-stream") body.stream = true;
     return buildCurlCommand(`${base}/v1/messages`, [
@@ -60,6 +74,11 @@ function buildCurl(tab: Tab, protocol: ClientProtocol, base: string, key: string
       "anthropic-version: 2023-06-01",
       "Content-Type: application/json",
     ], body);
+  }
+  if (protocol === "openai.responses") {
+    const body: Record<string, unknown> = { model, input: "Hello!" };
+    if (tab === "chat-stream") body.stream = true;
+    return buildCurlCommand(`${base}/v1/responses`, [`Authorization: Bearer ${key}`, "Content-Type: application/json"], body);
   }
   const headers = [`Authorization: Bearer ${key}`, "Content-Type: application/json"];
   if (tab === "embeddings") {
@@ -77,7 +96,7 @@ function buildCurl(tab: Tab, protocol: ClientProtocol, base: string, key: string
 }
 
 function buildJs(tab: Tab, protocol: ClientProtocol, base: string, key: string, model: string) {
-  if (protocol === "anthropic") {
+  if (protocol === "anthropic.messages") {
     const stream = tab === "chat-stream";
     return `import Anthropic from "@anthropic-ai/sdk";
 
@@ -92,6 +111,21 @@ const res = await client.messages.create({
   messages: [{ role: "user", content: "Hello!" }],${stream ? "\n  stream: true," : ""}
 });
 ${stream ? "for await (const event of res) console.log(event);" : "console.log(res.content[0].text);"}`;
+  }
+  if (protocol === "openai.responses") {
+    const stream = tab === "chat-stream";
+    return `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "${key}",
+  baseURL: "${base}/v1",
+});
+
+const res = await client.responses.create({
+  model: "${model}",
+  input: "Hello!",${stream ? "\n  stream: true," : ""}
+});
+${stream ? "for await (const event of res) console.log(event);" : "console.log(res.output_text);"}`;
   }
   if (tab === "embeddings") {
     return `import OpenAI from "openai";
@@ -139,7 +173,7 @@ console.log(res${tab === "chat-stream" ? "" : ".choices[0].message"});`;
 }
 
 function buildPy(tab: Tab, protocol: ClientProtocol, base: string, key: string, model: string) {
-  if (protocol === "anthropic") {
+  if (protocol === "anthropic.messages") {
     const stream = tab === "chat-stream";
     return `from anthropic import Anthropic
 
@@ -150,6 +184,17 @@ res = client.messages.create(
     messages=[{"role": "user", "content": "Hello!"}],${stream ? "\n    stream=True," : ""}
 )
 ${stream ? "for event in res:\n    print(event)" : "print(res.content[0].text)"}`;
+  }
+  if (protocol === "openai.responses") {
+    const stream = tab === "chat-stream";
+    return `from openai import OpenAI
+
+client = OpenAI(api_key="${key}", base_url="${base}/v1")
+res = client.responses.create(
+    model="${model}",
+    input="Hello!",${stream ? "\n    stream=True," : ""}
+)
+${stream ? "for event in res:\n    print(event)" : "print(res.output_text)"}`;
   }
   if (tab === "embeddings") {
     return `from openai import OpenAI
@@ -191,7 +236,7 @@ export default function ModelsPage() {
   const [model, setModel] = useState<string>("");
   const [keyId, setKeyId] = useState<string>("");
   const [tab, setTab] = useState<Tab>("chat");
-  const [clientProtocol, setClientProtocol] = useState<ClientProtocol>("openai");
+  const [clientProtocol, setClientProtocol] = useState<ClientProtocol>("openai.chat");
   const [lang, setLang] = useState<"curl" | "js" | "py">("curl");
   const [copied, setCopied] = useState(false);
   const [gatewayId, setGatewayId] = useState<string>("default");
@@ -220,7 +265,7 @@ export default function ModelsPage() {
   const activeModality = useMemo(() => {
     return activeModelRow?.modality || "chat";
   }, [activeModelRow]);
-  const activeProtocols = activeModality === "chat" ? routeProtocols(activeModelRow) : ["openai" as ClientProtocol];
+  const activeProtocols = activeModality === "chat" ? routeProtocols(activeModelRow) : ["openai.chat" as ClientProtocol];
   const effectiveProtocol: ClientProtocol = activeProtocols.includes(clientProtocol) ? clientProtocol : activeProtocols[0];
   const activeKey = useMemo(() => {
     const k = (keys || []).find((x) => String(x.id) === keyId);
@@ -251,7 +296,7 @@ export default function ModelsPage() {
   function selectModel(nextModel: Model) {
     setModel(nextModel.id);
     setTab(tabsForModality(nextModel.modality)[0]);
-    setClientProtocol((nextModel.modality || "chat") === "chat" ? routeProtocols(nextModel)[0] : "openai");
+    setClientProtocol((nextModel.modality || "chat") === "chat" ? routeProtocols(nextModel)[0] : "openai.chat");
   }
 
   return (
@@ -276,7 +321,7 @@ export default function ModelsPage() {
                   : `${m.target_count} providers, load-balanced`
                 : "single provider";
               const modality = m.modality || "chat";
-              const protocols = modality === "chat" ? routeProtocols(m) : ["openai" as ClientProtocol];
+              const protocols = modality === "chat" ? routeProtocols(m) : ["openai.chat" as ClientProtocol];
               const modBadge =
                 modality === "image"
                   ? "bg-purple-100 text-purple-700"
@@ -297,7 +342,7 @@ export default function ModelsPage() {
                   {m.id}
                   <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${modBadge}`}>{modality}</span>
                   {protocols.map((p) => (
-                    <span key={p} className={`ml-2 rounded px-1.5 py-0.5 text-xs ${p === "anthropic" ? "bg-purple-100 text-purple-700" : "bg-emerald-100 text-emerald-700"}`}>{p}</span>
+                    <span key={p} className={`ml-2 rounded px-1.5 py-0.5 text-xs ${p === "anthropic.messages" ? "bg-purple-100 text-purple-700" : p === "openai.responses" ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"}`}>{protocolLabel(p)}</span>
                   ))}
                   <span className="ml-2 text-xs text-gray-400">{label}</span>
                 </button>
@@ -349,7 +394,7 @@ export default function ModelsPage() {
                   onClick={() => setClientProtocol(p)}
                   className={`rounded px-2 py-1 ${effectiveProtocol === p ? "bg-brand-600 text-white" : "hover:bg-gray-100"}`}
                 >
-                  {p}
+                  {protocolLabel(p)}
                 </button>
               ))}
             </>

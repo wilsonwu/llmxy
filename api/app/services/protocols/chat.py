@@ -6,20 +6,24 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.services.protocols.ids import normalize_protocol
+
 
 def route_exposes(route: Any, protocol: str) -> bool:
+    kind = getattr(route, "modality", None) or "chat"
     protocols = route_protocols(route)
-    return protocol.lower() in protocols
+    return normalize_protocol(protocol, kind=kind) in protocols
 
 
 def route_protocols(route: Any) -> list[str]:
     raw = getattr(route, "exposed_protocols", None) or ["openai"]
+    kind = getattr(route, "modality", None) or "chat"
     protocols: list[str] = []
     for item in raw:
-        value = str(item).lower().strip()
+        value = normalize_protocol(str(item), kind=kind)
         if value and value not in protocols:
             protocols.append(value)
-    return protocols or ["openai"]
+    return protocols or [normalize_protocol("openai", kind=kind)]
 
 
 def openai_chat_token_limit(payload: dict[str, Any] | None, default: Any = None) -> Any:

@@ -15,6 +15,11 @@ from app.services.providers.openai_compat import (
     should_retry_with_max_tokens,
     should_retry_with_max_completion_tokens,
 )
+from app.services.protocols.openai_responses import (
+    openai_chat_to_responses_payload,
+    responses_response_to_openai_chat,
+    responses_sse_to_openai_chat_sse,
+)
 
 
 class OpenAIAdapter:
@@ -148,6 +153,45 @@ class OpenAIAdapter:
                         yield raw
                         return
                     async for chunk in r.aiter_raw():
+                        yield chunk
+
+        return ChatResult(status=200, stream=gen())
+
+    async def responses_from_chat(
+        self,
+        channel: Channel,
+        upstream_model: str,
+        payload: dict,
+        stream: bool,
+    ) -> ChatResult:
+        body = openai_chat_to_responses_payload(payload)
+        body["model"] = upstream_model
+        body["stream"] = stream
+        url = self._url(channel, "/responses")
+        headers = self._headers(channel)
+
+        if not stream:
+            async with httpx.AsyncClient(timeout=120) as cli:
+                r = await cli.post(url, json=body, headers=headers)
+                try:
+                    data = r.json()
+                except Exception:
+                    data = {"error": {"message": r.text}}
+                if r.status_code != 200:
+                    return ChatResult(status=r.status_code, body=data)
+                out = responses_response_to_openai_chat(data, upstream_model)
+                usage = out.get("usage") or {}
+                return ChatResult(
+                    status=200,
+                    body=out,
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get("completion_tokens", 0),
+                )
+
+        async def gen() -> AsyncIterator[bytes]:
+            async with httpx.AsyncClient(timeout=None) as cli:
+                async with cli.stream("POST", url, json=body, headers=headers) as r:
+                    async for chunk in responses_sse_to_openai_chat_sse(r.aiter_raw(), model=upstream_model):
                         yield chunk
 
         return ChatResult(status=200, stream=gen())

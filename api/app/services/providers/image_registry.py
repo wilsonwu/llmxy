@@ -18,6 +18,7 @@ from app.models import Channel
 from app.services.providers.azure_openai import AzureOpenAIAdapter
 from app.services.providers.gemini import GeminiAdapter
 from app.services.providers.openai import OpenAIAdapter
+from app.services.protocols.ids import GEMINI_IMAGES, OPENAI_IMAGES
 
 
 class ImageAdapter(Protocol):
@@ -44,4 +45,4 @@ def get_image_adapter(protocol: str) -> ImageAdapter | None:
 
 
 SUPPORTED_IMAGE_CONNECTORS = list(_IMAGE_REGISTRY.keys())
-SUPPORTED_IMAGE_PROTOCOLS = ["openai", "gemini"]
+SUPPORTED_IMAGE_PROTOCOLS = [OPENAI_IMAGES, GEMINI_IMAGES]

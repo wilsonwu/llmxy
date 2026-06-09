@@ -30,9 +30,9 @@ async def _validate_protocol(db: AsyncSession, req: ModelIn) -> None:
     channel = await db.get(Channel, req.channel_id)
     if not channel:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"channel {req.channel_id} not found")
-    inherited_protocol = channel_protocol(channel)
+    inherited_protocol = channel_protocol(channel, req.kind)
     connector = channel_connector(channel)
-    override = normalize_protocol(req.upstream_protocol) if req.upstream_protocol else ""
+    override = normalize_protocol(req.upstream_protocol, kind=req.kind) if req.upstream_protocol else ""
     proto = override or inherited_protocol
     if req.kind == "image":
         allowed = SUPPORTED_IMAGE_PROTOCOLS

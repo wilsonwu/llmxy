@@ -43,7 +43,7 @@ async def seed() -> None:
         if not ch:
             ch = Channel(
                 name="default-openai",
-                provider_type="openai",
+                provider_type="openai.chat",
                 connector_type="openai",
                 base_url="https://api.openai.com/v1",
                 api_key_enc=None,  # admin must set the real key
@@ -73,6 +73,7 @@ async def seed() -> None:
             db.add(
                 RoutePolicy(
                     user_facing_model="gpt-4o-mini",
+                    exposed_protocols=["openai.chat"],
                     strategy=RouteStrategy.weighted,
                     targets_jsonb=[{"model_id": m.id, "weight": 1, "fallback_order": 0}],
                     enabled=True,

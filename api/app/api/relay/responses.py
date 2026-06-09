@@ -2,90 +2,31 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.relay.chat import _load_route, _record_smart_usage
 from app.core.deps import get_api_key
+from app.core.request_ctx import client_ip, request_id_var
 from app.db.session import get_db
-from app.models import ApiKey, Channel, Model, RoutePolicy, RouteScope, UsageLog, User
+from app.models import ApiKey, UsageLog, User
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user, has_quota
-from app.services.protocols.chat import route_exposes
+from app.services.protocols.openai_responses import (
+    openai_chat_sse_to_responses_sse,
+    openai_chat_to_responses_response,
+    responses_to_openai_chat_payload,
+)
 from app.services.quota import rate_limit, user_rpm
-from app.core.request_ctx import client_ip, request_id_var
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
 
-async def _load_route(
-    db: AsyncSession,
-    user_facing_model: str,
-    *,
-    expected_modality: str | None = None,
-    expected_protocol: str | None = None,
-) -> tuple[RoutePolicy, dict[int, Model], dict[int, Channel]]:
-    policy = (
-        await db.execute(select(RoutePolicy).where(RoutePolicy.user_facing_model == user_facing_model))
-    ).scalar_one_or_none()
-    if not policy or not policy.enabled or policy.scope == RouteScope.private:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"model {user_facing_model} not available")
-    # A route only serves its own modality — a chat name can't be called on the
-    # embeddings/images endpoint and vice versa.
-    if expected_modality is not None and (policy.modality or "chat") != expected_modality:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"model {user_facing_model} is not available on the {expected_modality} endpoint",
-        )
-    if expected_protocol is not None and not route_exposes(policy, expected_protocol):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            f"model {user_facing_model} is not available on the {expected_protocol} protocol",
-        )
-    target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
-    if not target_ids:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "route has no targets")
-    models = (await db.execute(select(Model).where(Model.id.in_(target_ids)))).scalars().all()
-    models_by_id = {m.id: m for m in models}
-    channel_ids = {m.channel_id for m in models}
-    channels = (await db.execute(select(Channel).where(Channel.id.in_(channel_ids)))).scalars().all()
-    channels_by_id = {c.id: c for c in channels}
-    return policy, models_by_id, channels_by_id
-
-
-async def _record_smart_usage(
-    db: AsyncSession,
-    user: User,
-    api_key: ApiKey,
-    decision,
-    user_facing_model: str,
-    request_id: str,
-) -> None:
-    """If smart routing called the embedding classifier, charge for it and log a row.
-    Tied to the relay row by request_id; kind='classifier'. Cache hits cost nothing
-    but still leave a zero-cost row for traceability.
-    """
-    eu = getattr(decision, "embedding_usage", None)
-    if not eu:
-        return
-    cost = calc_cost_cents(eu.model, eu.prompt_tokens, 0) if eu.status == "ok" else 0
-    if cost > 0:
-        await charge_user(db, user, api_key, cost, ref_id=request_id, note=f"{user_facing_model} [classifier]")
-    db.add(UsageLog(
-        user_id=user.id, api_key_id=api_key.id, model_id=eu.model.id,
-        user_facing_model=user_facing_model, upstream_model=eu.upstream_model,
-        prompt_tokens=eu.prompt_tokens, completion_tokens=0,
-        cost_cents=cost, latency_ms=eu.latency_ms,
-        status=eu.status, request_id=request_id,
-        kind="classifier", resolved_label=getattr(decision, "chosen_label", None),
-    ))
-
-
-@router.post("/chat/completions")
-async def chat_completions(
+@router.post("/responses")
+async def responses(
     request: Request,
     creds: tuple[ApiKey, User] = Depends(get_api_key),
     db: AsyncSession = Depends(get_db),
@@ -107,11 +48,12 @@ async def chat_completions(
     if not user_facing_model:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing model")
 
+    chat_payload = responses_to_openai_chat_payload(payload)
     stream = bool(payload.get("stream"))
     policy, models_by_id, channels_by_id = await _load_route(
-        db, user_facing_model, expected_modality="chat", expected_protocol="openai"
+        db, user_facing_model, expected_modality="chat", expected_protocol="openai.responses"
     )
-    prompt_text = providers.extract_prompt_text(payload)
+    prompt_text = providers.extract_prompt_text(chat_payload)
     decision = await providers.select_route(
         policy, models_by_id, channels_by_id,
         prompt_text=prompt_text, client_ip=client_ip(request), db=db,
@@ -138,19 +80,29 @@ async def chat_completions(
                     last_err = f"connector {connector} does not support protocol {protocol}"
                     continue
                 try:
-                    result = await providers.run_chat(adapter, protocol, c, m.upstream_model, payload, stream=True)
+                    result = await providers.run_chat(adapter, protocol, c, m.upstream_model, chat_payload, stream=True)
                 except Exception as e:
-                    last_err = str(e); continue
+                    last_err = str(e)
+                    continue
                 if result.status != 200 or result.stream is None:
-                    last_err = str(result.body); continue
+                    last_err = str(result.body)
+                    continue
+
                 prompt_tokens = 0
                 completion_tokens = 0
-                async for chunk in result.stream:
-                    u = providers.parse_usage_from_chunk(chunk)
-                    if u:
-                        prompt_tokens = u.get("prompt_tokens", prompt_tokens)
-                        completion_tokens = u.get("completion_tokens", completion_tokens)
-                    yield chunk
+
+                async def source() -> AsyncIterator[bytes]:
+                    nonlocal prompt_tokens, completion_tokens
+                    async for chunk in result.stream:
+                        usage = providers.parse_usage_from_chunk(chunk)
+                        if usage:
+                            prompt_tokens = int(usage.get("prompt_tokens") or prompt_tokens or 0)
+                            completion_tokens = int(usage.get("completion_tokens") or completion_tokens or 0)
+                        yield chunk
+
+                async for event in openai_chat_sse_to_responses_sse(source(), model=user_facing_model):
+                    yield event
+
                 cost = calc_cost_cents(m, prompt_tokens, completion_tokens)
                 await charge_user(db, user, api_key, cost, ref_id=request_id, note=user_facing_model)
                 db.add(UsageLog(
@@ -175,13 +127,16 @@ async def chat_completions(
         protocol = providers.resolve_upstream_protocol(m, c)
         adapter = providers.get_connector_adapter(connector)
         if not adapter:
-            last_err = f"no connector adapter for {connector}"; continue
+            last_err = f"no connector adapter for {connector}"
+            continue
         if not providers.connector_supports_protocol(connector, protocol):
-            last_err = f"connector {connector} does not support protocol {protocol}"; continue
+            last_err = f"connector {connector} does not support protocol {protocol}"
+            continue
         try:
-            result = await providers.run_chat(adapter, protocol, c, m.upstream_model, payload, stream=False)
+            result = await providers.run_chat(adapter, protocol, c, m.upstream_model, chat_payload, stream=False)
         except Exception as e:
-            last_err = str(e); continue
+            last_err = str(e)
+            continue
         if result.status == 200 and result.body:
             cost = calc_cost_cents(m, result.prompt_tokens, result.completion_tokens)
             await charge_user(db, user, api_key, cost, ref_id=request_id, note=user_facing_model)
@@ -196,6 +151,6 @@ async def chat_completions(
             await _record_smart_usage(db, user, api_key, decision, user_facing_model, request_id)
             db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
             await db.commit()
-            return JSONResponse(result.body)
+            return JSONResponse(openai_chat_to_responses_response(result.body, user_facing_model))
         last_err = result.body
     raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"all upstreams failed: {last_err}")

@@ -8,16 +8,21 @@ type Tier = { size: string; quality: string; price_micro: number };
 type Pricing = { mode?: string; tiers?: Tier[]; default_price_micro?: number };
 type M = { id?: number; code: string; display_name: string; channel_id: number; upstream_model: string; kind: string; upstream_protocol?: string | null; prompt_rate: number; completion_rate: number; pricing_jsonb: Pricing; enabled: boolean };
 type C = { id: number; name: string; provider_type: string; connector_type: string };
-const CHAT_PROTOCOLS = ["openai", "anthropic", "gemini"];
+const CHAT_PROTOCOLS = ["openai.chat", "openai.responses", "anthropic.messages", "gemini.generate_content"];
 // Anthropic has no embeddings API, so it's excluded from embedding models.
-const EMBEDDING_PROTOCOLS = ["openai", "gemini"];
-const IMAGE_PROTOCOLS = ["openai", "gemini"];
+const EMBEDDING_PROTOCOLS = ["openai.embeddings", "gemini.embeddings"];
+const IMAGE_PROTOCOLS = ["openai.images", "gemini.images"];
 const empty: M = { code: "", display_name: "", channel_id: 0, upstream_model: "", kind: "chat", upstream_protocol: null, prompt_rate: 0, completion_rate: 0, pricing_jsonb: {}, enabled: true };
 
 const UPSTREAM_PROTOCOL_META: Record<string, { label: string; hint: string }> = {
-  openai: { label: "OpenAI", hint: "OpenAI-compatible request/response semantics" },
-  anthropic: { label: "Anthropic", hint: "Claude Messages API wire format" },
-  gemini: { label: "Google Gemini", hint: "Gemini REST wire format" },
+  "openai.chat": { label: "OpenAI / Chat", hint: "Chat Completions wire format" },
+  "openai.responses": { label: "OpenAI / Responses", hint: "Responses API wire format" },
+  "openai.embeddings": { label: "OpenAI / Embeddings", hint: "OpenAI embeddings wire format" },
+  "openai.images": { label: "OpenAI / Images", hint: "OpenAI image generation wire format" },
+  "anthropic.messages": { label: "Anthropic / Messages", hint: "Claude Messages API wire format" },
+  "gemini.generate_content": { label: "Gemini / Generate Content", hint: "Gemini generateContent wire format" },
+  "gemini.embeddings": { label: "Gemini / Embeddings", hint: "Gemini embedding wire format" },
+  "gemini.images": { label: "Gemini / Images", hint: "Gemini image wire format" },
 };
 
 const CONNECTOR_META: Record<string, { label: string; hint: string }> = {
@@ -28,11 +33,11 @@ const CONNECTOR_META: Record<string, { label: string; hint: string }> = {
 };
 
 function protocolLabel(protocol: string) {
-  return UPSTREAM_PROTOCOL_META[protocol]?.label || protocol || "unknown";
+  return UPSTREAM_PROTOCOL_META[normalizeProtocol(protocol)]?.label || protocol || "unknown";
 }
 
 function protocolHint(protocol: string) {
-  return UPSTREAM_PROTOCOL_META[protocol]?.hint || "Custom upstream adapter";
+  return UPSTREAM_PROTOCOL_META[normalizeProtocol(protocol)]?.hint || "Custom upstream adapter";
 }
 
 function connectorLabel(connector: string) {
@@ -40,7 +45,27 @@ function connectorLabel(connector: string) {
 }
 
 function protocolTone(protocol: string) {
-  return protocol === "anthropic" ? "purple" : protocol === "gemini" ? "warning" : protocol === "openai" ? "success" : "neutral";
+  const normalized = normalizeProtocol(protocol);
+  return normalized.startsWith("anthropic.") ? "purple" : normalized.startsWith("gemini.") ? "warning" : normalized.startsWith("openai.") ? "success" : "neutral";
+}
+
+function normalizeProtocol(protocol: string, kind = "chat") {
+  if (protocol === "openai") {
+    if (kind === "embedding") return "openai.embeddings";
+    if (kind === "image") return "openai.images";
+    return "openai.chat";
+  }
+  if (protocol === "anthropic") return "anthropic.messages";
+  if (protocol === "gemini") {
+    if (kind === "embedding") return "gemini.embeddings";
+    if (kind === "image") return "gemini.images";
+    return "gemini.generate_content";
+  }
+  if (kind === "embedding" && protocol.startsWith("openai.")) return "openai.embeddings";
+  if (kind === "image" && protocol.startsWith("openai.")) return "openai.images";
+  if (kind === "embedding" && protocol.startsWith("gemini.")) return "gemini.embeddings";
+  if (kind === "image" && protocol.startsWith("gemini.")) return "gemini.images";
+  return protocol || "openai.chat";
 }
 
 // A representative upstream request for each (protocol, kind), mirroring the
@@ -51,7 +76,7 @@ function upstreamSample(protocol: string, connector: string, kind: string, m: st
   const model = m || "<upstream_model>";
   const apiVer = "2024-10-21";
   const imgVer = "2025-04-01-preview";
-  if (protocol === "openai") {
+  if (protocol === "openai.chat" || protocol === "openai.embeddings" || protocol === "openai.images") {
     if (connector === "azure_openai") {
       if (kind === "embedding")
         return [
@@ -95,7 +120,15 @@ function upstreamSample(protocol: string, connector: string, kind: string, m: st
       JSON.stringify({ model, messages: [{ role: "user", content: "Hello" }], max_tokens: 1024, stream: false }, null, 2),
     ].join("\n");
   }
-  if (protocol === "anthropic") {
+  if (protocol === "openai.responses") {
+    return [
+      "POST {base_url}/v1/responses",
+      "Authorization: Bearer <api-key>",
+      "",
+      JSON.stringify({ model, input: "Hello", max_output_tokens: 1024, stream: false }, null, 2),
+    ].join("\n");
+  }
+  if (protocol === "anthropic.messages") {
     // Chat only — Anthropic has no embeddings/image APIs.
     return [
       "POST {base_url}/v1/messages",
@@ -109,7 +142,7 @@ function upstreamSample(protocol: string, connector: string, kind: string, m: st
       ),
     ].join("\n");
   }
-  if (protocol === "gemini") {
+  if (protocol === "gemini.generate_content" || protocol === "gemini.embeddings" || protocol === "gemini.images") {
     if (kind === "embedding")
       return [
         `POST {base_url}/v1beta/models/${model}:batchEmbedContents?key=<api-key>`,
@@ -188,9 +221,9 @@ export default function ModelsPage() {
     } catch (e: any) { toast(e?.message || "Delete failed", "error"); }
   }
   const chName = (id: number) => channels?.find((c) => c.id === id)?.name || `#${id}`;
-  const chProtocol = (id: number) => (channels?.find((c) => c.id === id)?.provider_type || "openai").toLowerCase();
+  const chProtocol = (id: number, kind = "chat") => normalizeProtocol((channels?.find((c) => c.id === id)?.provider_type || "openai.chat").toLowerCase(), kind);
   const chConnector = (id: number) => (channels?.find((c) => c.id === id)?.connector_type || "openai").toLowerCase();
-  const effectiveProtocol = (m: Pick<M, "upstream_protocol" | "channel_id">) => (m.upstream_protocol || chProtocol(m.channel_id)).toLowerCase();
+  const effectiveProtocol = (m: Pick<M, "upstream_protocol" | "channel_id"> & { kind?: string }) => normalizeProtocol((m.upstream_protocol || chProtocol(m.channel_id, m.kind || "chat")).toLowerCase(), m.kind || "chat");
   const isProtocolSupportedForKind = (protocol: string, kind: string) => {
     const allowed = kind === "image" ? IMAGE_PROTOCOLS : kind === "embedding" ? EMBEDDING_PROTOCOLS : CHAT_PROTOCOLS;
     return allowed.includes(protocol);
@@ -289,7 +322,7 @@ export default function ModelsPage() {
                 </select></div>
               <div><label className="label">upstream protocol</label>
                 <select className="input w-full" value={editing.upstream_protocol || ""} onChange={(e) => setEditing({ ...editing, upstream_protocol: e.target.value || null })}>
-                  <option value="">inherit channel protocol ({protocolLabel(chProtocol(editing.channel_id))})</option>
+                  <option value="">inherit channel protocol ({protocolLabel(chProtocol(editing.channel_id, editing.kind))})</option>
                   {(editing.kind === "image" ? IMAGE_PROTOCOLS : editing.kind === "embedding" ? EMBEDDING_PROTOCOLS : CHAT_PROTOCOLS).map((p) => <option key={p} value={p}>{protocolLabel(p)} - {protocolHint(p)}</option>)}
                 </select></div>
               <div><label className="label">code (public-facing name)</label>

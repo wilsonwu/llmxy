@@ -13,7 +13,7 @@ type Rule =
   | { type: "code_block"; label: string }
   | { type: "geo"; countries: string[]; label: string };
 type Exemplar = { label: string; text: string };
-type ExposedProtocol = "openai" | "anthropic";
+type ExposedProtocol = "openai.chat" | "openai.responses" | "anthropic.messages" | "openai.embeddings" | "openai.images";
 type R = {
   id?: number;
   user_facing_model: string;
@@ -46,7 +46,7 @@ const empty: R = {
   scope: "public",
   enabled: true,
   modality: "chat",
-  exposed_protocols: ["openai"],
+  exposed_protocols: ["openai.chat"],
 };
 
 const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
@@ -103,7 +103,7 @@ export default function RoutesPage() {
   async function save(r: R) {
     const payload: R = { ...r };
     const protocols = routeProtocols(payload);
-    payload.exposed_protocols = payload.modality === "chat" ? protocols : ["openai"];
+    payload.exposed_protocols = payload.modality === "chat" ? protocols : [payload.modality === "image" ? "openai.images" : "openai.embeddings"];
     if (r.strategy !== "smart") {
       payload.smart_rules_jsonb = [];
       payload.smart_default_label = null;
@@ -136,13 +136,20 @@ export default function RoutesPage() {
   const channelById = (id: number) => channels?.find((c) => c.id === id);
   const modelLabel = (id: number) => modelById(id)?.code || `#${id}`;
   const modalityTone = (m: string) => m === "image" ? "purple" : m === "embedding" ? "brand" : "info";
-  const protocolTone = (p: string) => p === "anthropic" ? "purple" : p === "gemini" ? "warning" : p === "openai" ? "success" : "neutral";
-  const protocolLabel = (p: string) => p;
+  const protocolTone = (p: string) => p.startsWith("anthropic.") ? "purple" : p.startsWith("gemini.") ? "warning" : p.startsWith("openai.") ? "success" : "neutral";
+  const protocolLabel = (p: string) => p.replace(".", " / ");
   const connectorLabel = (c: string) => c === "azure_openai" ? "azure openai" : c === "openai" ? "openai-compatible" : c;
   function routeProtocols(r: R): ExposedProtocol[] {
-    const raw = r.exposed_protocols?.length ? r.exposed_protocols : ["openai"];
-    const normalized = Array.from(new Set(raw.filter((p): p is ExposedProtocol => p === "openai" || p === "anthropic")));
-    return normalized.length ? normalized : ["openai"];
+    const raw = r.exposed_protocols?.length ? r.exposed_protocols : ["openai.chat"];
+    const normalized = Array.from(new Set(raw.map((p) => normalizeExposedProtocol(p, r.modality)).filter((p): p is ExposedProtocol => Boolean(p))));
+    return normalized.length ? normalized : ["openai.chat"];
+  }
+
+  function normalizeExposedProtocol(protocol: string, modality: R["modality"]): ExposedProtocol {
+    if (protocol === "openai") return modality === "image" ? "openai.images" : modality === "embedding" ? "openai.embeddings" : "openai.chat";
+    if (protocol === "anthropic") return "anthropic.messages";
+    if (protocol === "openai.chat" || protocol === "openai.responses" || protocol === "anthropic.messages" || protocol === "openai.embeddings" || protocol === "openai.images") return protocol;
+    return "openai.chat";
   }
   const effectiveProtocol = (m?: M) => {
     if (!m) return "unknown";
@@ -540,7 +547,7 @@ export default function RoutesPage() {
               <select className="input w-full" value={e.modality || "chat"}
                 onChange={(ev) => {
                   const mod = ev.target.value as R["modality"];
-                  setEditing({ ...e, modality: mod, targets_jsonb: [], exposed_protocols: mod === "chat" ? routeProtocols(e) : ["openai"] });
+                  setEditing({ ...e, modality: mod, targets_jsonb: [], exposed_protocols: mod === "chat" ? routeProtocols(e).filter((p) => p === "openai.chat" || p === "openai.responses" || p === "anthropic.messages") : [mod === "image" ? "openai.images" : "openai.embeddings"] });
                 }}>
                 <option value="chat">chat</option>
                 <option value="embedding">embedding</option>
@@ -554,9 +561,9 @@ export default function RoutesPage() {
             <div>
               <label className="label">Public protocols</label>
               <div className="flex flex-wrap gap-2">
-                {(["openai", "anthropic"] as ExposedProtocol[]).map((p) => {
+                {(["openai.chat", "openai.responses", "anthropic.messages"] as ExposedProtocol[]).map((p) => {
                   const checked = routeProtocols(e).includes(p);
-                  const disabled = p === "anthropic" && (e.modality || "chat") !== "chat";
+                  const disabled = (e.modality || "chat") !== "chat";
                   return (
                     <label key={p} className={`flex items-center gap-2 rounded border px-3 py-2 text-sm ${disabled ? "bg-gray-50 text-gray-400" : "bg-white"}`}>
                       <input
@@ -566,10 +573,10 @@ export default function RoutesPage() {
                         onChange={(ev) => {
                           const current = routeProtocols(e);
                           const next = ev.target.checked ? [...current, p] : current.filter((x) => x !== p);
-                          setEditing({ ...e, exposed_protocols: next.length ? Array.from(new Set(next)) : ["openai"] });
+                          setEditing({ ...e, exposed_protocols: next.length ? Array.from(new Set(next)) : ["openai.chat"] });
                         }}
                       />
-                      <span>{p}</span>
+                      <span>{protocolLabel(p)}</span>
                     </label>
                   );
                 })}

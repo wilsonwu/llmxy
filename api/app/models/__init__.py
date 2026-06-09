@@ -210,8 +210,8 @@ class Channel(Base):
     __tablename__ = "channels"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
-    # Semantic upstream request/response protocol: openai / anthropic / gemini.
-    provider_type: Mapped[str] = mapped_column(String(32), default="openai")
+    # Semantic upstream request/response protocol: openai.chat / openai.responses / anthropic.messages / gemini.generate_content.
+    provider_type: Mapped[str] = mapped_column(String(32), default="openai.chat")
     # Connection implementation: URL template, auth headers, API versions, etc.
     # Examples: openai, azure_openai, anthropic, gemini.
     connector_type: Mapped[str] = mapped_column(String(64), default="openai", server_default="openai", nullable=False)
@@ -264,9 +264,9 @@ class RoutePolicy(Base):
     modality: Mapped[str] = mapped_column(String(16), default="chat", server_default="chat", nullable=False)
     # Public protocols this route exposes to clients. Upstream protocols are
     # per-target Model.upstream_protocol; this list controls request/response
-    # wire shape at the gateway boundary (e.g. OpenAI-compatible or Anthropic
-    # Messages). JSON keeps dev-time schema iteration cheap.
-    exposed_protocols: Mapped[list] = mapped_column(JSON, default=lambda: ["openai"], server_default='["openai"]', nullable=False)
+    # wire shape at the gateway boundary (e.g. OpenAI Chat, OpenAI Responses,
+    # or Anthropic Messages). JSON keeps dev-time schema iteration cheap.
+    exposed_protocols: Mapped[list] = mapped_column(JSON, default=lambda: ["openai.chat"], server_default='["openai.chat"]', nullable=False)
     strategy: Mapped[RouteStrategy] = mapped_column(SAEnum(RouteStrategy), default=RouteStrategy.weighted)
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # targets: [{model_id:int, weight:int, fallback_order:int, label?:str}]

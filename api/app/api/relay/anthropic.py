@@ -92,7 +92,7 @@ async def messages(
                     last_err = f"connector {connector} does not support protocol {protocol}"
                     continue
                 try:
-                    result = await adapter.chat(c, m.upstream_model, openai_payload, stream=True)
+                    result = await providers.run_chat(adapter, protocol, c, m.upstream_model, openai_payload, stream=True)
                 except Exception as e:
                     last_err = str(e)
                     continue
@@ -142,7 +142,7 @@ async def messages(
             last_err = f"connector {connector} does not support protocol {protocol}"
             continue
         try:
-            result = await adapter.chat(c, m.upstream_model, openai_payload, stream=False)
+            result = await providers.run_chat(adapter, protocol, c, m.upstream_model, openai_payload, stream=False)
         except Exception as e:
             last_err = str(e)
             continue

@@ -6,31 +6,40 @@ import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, 
 
 type C = { id?: number; name: string; provider_type: string; connector_type: string; base_url: string; api_key_enc?: string; enabled: boolean };
 
-const empty: C = { name: "", provider_type: "openai", connector_type: "openai", base_url: "https://api.openai.com/v1", api_key_enc: "", enabled: true };
+const empty: C = { name: "", provider_type: "openai.chat", connector_type: "openai", base_url: "https://api.openai.com/v1", api_key_enc: "", enabled: true };
 
 const UPSTREAM_PROTOCOLS = [
-  { id: "openai", label: "OpenAI", hint: "OpenAI chat/completions, embeddings, and image response semantics" },
-  { id: "anthropic", label: "Anthropic", hint: "Claude Messages API semantics" },
-  { id: "gemini", label: "Gemini", hint: "Google Gemini generateContent / embedding semantics" },
+  { id: "openai.chat", label: "OpenAI / Chat Completions", hint: "/v1/chat/completions semantics" },
+  { id: "openai.responses", label: "OpenAI / Responses", hint: "/v1/responses semantics" },
+  { id: "anthropic.messages", label: "Anthropic / Messages", hint: "Claude Messages API semantics" },
+  { id: "gemini.generate_content", label: "Gemini / Generate Content", hint: "Google Gemini generateContent semantics" },
 ];
 
 const UPSTREAM_CONNECTORS = [
-  { id: "openai", protocol: "openai", label: "OpenAI-compatible", hint: "Bearer auth with /v1 paths; works for OpenAI and compatible gateways", baseUrl: "https://api.openai.com/v1" },
-  { id: "azure_openai", protocol: "openai", label: "Azure OpenAI", hint: "Azure deployment paths, api-key header, and api-version query", baseUrl: "https://{resource}.openai.azure.com" },
-  { id: "anthropic", protocol: "anthropic", label: "Anthropic", hint: "x-api-key auth with /v1/messages", baseUrl: "https://api.anthropic.com" },
-  { id: "gemini", protocol: "gemini", label: "Google Gemini", hint: "key query parameter with Gemini REST paths", baseUrl: "https://generativelanguage.googleapis.com" },
+  { id: "openai", protocols: ["openai.chat", "openai.responses", "openai.embeddings", "openai.images"], label: "OpenAI-compatible", hint: "Bearer auth with /v1 paths; works for OpenAI and compatible gateways", baseUrl: "https://api.openai.com/v1" },
+  { id: "azure_openai", protocols: ["openai.chat", "openai.embeddings", "openai.images"], label: "Azure OpenAI", hint: "Azure deployment paths, api-key header, and api-version query", baseUrl: "https://{resource}.openai.azure.com" },
+  { id: "anthropic", protocols: ["anthropic.messages"], label: "Anthropic", hint: "x-api-key auth with /v1/messages", baseUrl: "https://api.anthropic.com" },
+  { id: "gemini", protocols: ["gemini.generate_content", "gemini.embeddings", "gemini.images"], label: "Google Gemini", hint: "key query parameter with Gemini REST paths", baseUrl: "https://generativelanguage.googleapis.com" },
 ];
+
+function normalizeProtocol(id: string) {
+  if (id === "openai") return "openai.chat";
+  if (id === "anthropic") return "anthropic.messages";
+  if (id === "gemini") return "gemini.generate_content";
+  return id;
+}
 
 function protocolMeta(id: string) {
   return UPSTREAM_PROTOCOLS.find((p) => p.id === id) || { id, label: id, hint: "Custom upstream adapter" };
 }
 
 function connectorMeta(id: string) {
-  return UPSTREAM_CONNECTORS.find((p) => p.id === id) || { id, protocol: "openai", label: id, hint: "Custom upstream connector", baseUrl: "" };
+  return UPSTREAM_CONNECTORS.find((p) => p.id === id) || { id, protocols: ["openai.chat"], label: id, hint: "Custom upstream connector", baseUrl: "" };
 }
 
 function connectorsForProtocol(protocol: string) {
-  return UPSTREAM_CONNECTORS.filter((c) => c.protocol === protocol);
+  const normalized = normalizeProtocol(protocol);
+  return UPSTREAM_CONNECTORS.filter((c) => c.protocols.includes(normalized));
 }
 
 function defaultConnector(protocol: string) {
@@ -38,7 +47,8 @@ function defaultConnector(protocol: string) {
 }
 
 function protocolTone(id: string) {
-  return id === "anthropic" ? "purple" : id === "gemini" ? "warning" : id === "openai" ? "success" : "neutral";
+  const normalized = normalizeProtocol(id);
+  return normalized.startsWith("anthropic.") ? "purple" : normalized.startsWith("gemini.") ? "warning" : normalized.startsWith("openai.") ? "success" : "neutral";
 }
 
 export default function ChannelsPage() {
@@ -96,7 +106,7 @@ export default function ChannelsPage() {
                 </td>
                 <td>
                   <ListCell
-                    primary={<><Badge tone={protocolTone(c.provider_type)}>{protocolMeta(c.provider_type).label}</Badge><Badge tone="neutral">{connectorMeta(c.connector_type).label}</Badge></>}
+                    primary={<><Badge tone={protocolTone(c.provider_type)}>{protocolMeta(normalizeProtocol(c.provider_type)).label}</Badge><Badge tone="neutral">{connectorMeta(c.connector_type).label}</Badge></>}
                     secondary={connectorMeta(c.connector_type).hint}
                   />
                 </td>
@@ -143,7 +153,7 @@ export default function ChannelsPage() {
             </div>
             <div>
               <label className="label">Semantic protocol</label>
-              <select className="input w-full" value={editing.provider_type} onChange={(e) => {
+              <select className="input w-full" value={normalizeProtocol(editing.provider_type)} onChange={(e) => {
                 const protocol = e.target.value;
                 const connector = defaultConnector(protocol);
                 setEditing({ ...editing, provider_type: protocol, connector_type: connector, base_url: connectorMeta(connector).baseUrl || editing.base_url });

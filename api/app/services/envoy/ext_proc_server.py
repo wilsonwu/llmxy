@@ -141,14 +141,16 @@ def _auth_plain(headers: dict[str, str]) -> str | None:
 def _client_protocol_and_modality(path: str) -> tuple[str, str | None]:
     clean = path.split("?", 1)[0]
     if clean.endswith("/v1/messages") or clean == "/v1/messages":
-        return "anthropic", "chat"
+        return "anthropic.messages", "chat"
     if clean.endswith("/v1/chat/completions") or clean == "/v1/chat/completions":
-        return "openai", "chat"
+        return "openai.chat", "chat"
+    if clean.endswith("/v1/responses") or clean == "/v1/responses":
+        return "openai.responses", "chat"
     if clean.endswith("/v1/embeddings") or clean == "/v1/embeddings":
-        return "openai", "embedding"
+        return "openai.embeddings", "embedding"
     if clean.endswith("/v1/images/generations") or clean == "/v1/images/generations":
-        return "openai", "image"
-    return "openai", None
+        return "openai.images", "image"
+    return "openai.chat", None
 
 
 def _extract_model(body: bytes) -> str | None:
@@ -189,7 +191,7 @@ async def _load_route(db: AsyncSession, user_facing_model: str) -> tuple[RoutePo
 def _prompt_text(client_protocol: str, payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
-    if client_protocol == "anthropic":
+    if client_protocol == "anthropic.messages":
         return providers.extract_prompt_text(anthropic_to_openai_payload(payload))
     return providers.extract_prompt_text(payload)
 

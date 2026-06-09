@@ -130,7 +130,7 @@ class PaymentInitResp(BaseModel):
 # -------- Channels / Models / Routes --------
 class ChannelIn(BaseModel):
     name: str
-    provider_type: str = "openai"  # semantic upstream protocol, e.g. openai / anthropic / gemini
+    provider_type: str = "openai.chat"  # semantic upstream protocol, e.g. openai.chat / openai.responses
     connector_type: str = "openai"  # upstream connector, e.g. openai / azure_openai / anthropic / gemini
     base_url: str
     api_key_enc: Optional[str] = None
@@ -193,7 +193,7 @@ class RouteExemplar(BaseModel):
 class RoutePolicyIn(BaseModel):
     user_facing_model: str
     modality: str = "chat"  # chat | embedding | image
-    exposed_protocols: list[str] = Field(default_factory=lambda: ["openai"])  # openai | anthropic (chat only)
+    exposed_protocols: list[str] = Field(default_factory=lambda: ["openai.chat"])
     strategy: str = "weighted"  # weighted/smart/fallback
     targets_jsonb: list[RouteTarget] = []
     smart_rules_jsonb: list[RouteRule] = []
@@ -209,7 +209,7 @@ class RoutePolicyOut(BaseModel):
     id: int
     user_facing_model: str
     modality: str = "chat"
-    exposed_protocols: list[str] = Field(default_factory=lambda: ["openai"])
+    exposed_protocols: list[str] = Field(default_factory=lambda: ["openai.chat"])
     strategy: str
     targets_jsonb: list[dict]
     smart_rules_jsonb: list[dict] = []
