@@ -137,6 +137,7 @@ async def openai_chat_sse_to_responses_sse(stream: AsyncIterator[bytes], *, mode
     prompt_tokens = 0
     completion_tokens = 0
     started = False
+    text_parts: list[str] = []
     async for obj in _iter_sse_json(stream):
         usage = obj.get("usage") or {}
         if usage:
@@ -146,6 +147,7 @@ async def openai_chat_sse_to_responses_sse(stream: AsyncIterator[bytes], *, mode
         delta = choice.get("delta") or {}
         text = delta.get("content")
         if text:
+            text_parts.append(str(text))
             if not started:
                 started = True
                 yield _sse("response.created", {"type": "response.created", "response": _response_stub(response_id, model, "in_progress")})
@@ -157,10 +159,15 @@ async def openai_chat_sse_to_responses_sse(stream: AsyncIterator[bytes], *, mode
         yield _sse("response.created", {"type": "response.created", "response": _response_stub(response_id, model, "in_progress")})
         yield _sse("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": {"id": item_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}})
         yield _sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": 0, "content_index": content_index, "part": {"type": "output_text", "text": "", "annotations": []}})
-    yield _sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": content_index, "text": ""})
-    yield _sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": 0, "content_index": content_index, "part": {"type": "output_text", "text": "", "annotations": []}})
-    yield _sse("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": {"id": item_id, "type": "message", "status": "completed", "role": "assistant", "content": []}})
+    output_text = "".join(text_parts)
+    content = {"type": "output_text", "text": output_text, "annotations": []}
+    item = {"id": item_id, "type": "message", "status": "completed", "role": "assistant", "content": [content]}
+    yield _sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": content_index, "text": output_text})
+    yield _sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": 0, "content_index": content_index, "part": content})
+    yield _sse("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": item})
     completed = _response_stub(response_id, model, "completed")
+    completed["output"] = [item]
+    completed["output_text"] = output_text
     completed["usage"] = {"input_tokens": prompt_tokens, "output_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}
     yield _sse("response.completed", {"type": "response.completed", "response": completed})
     yield b"data: [DONE]\n\n"

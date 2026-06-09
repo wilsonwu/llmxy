@@ -203,6 +203,10 @@ class AzureOpenAIAdapter:
         async def gen() -> AsyncIterator[bytes]:
             async with httpx.AsyncClient(timeout=None) as cli:
                 async with cli.stream("POST", url, json=body, headers=headers) as r:
+                    if r.status_code >= 400:
+                        raw = await r.aread()
+                        yield raw
+                        return
                     async for chunk in responses_sse_to_openai_chat_sse(r.aiter_raw(), model=upstream_model):
                         yield chunk
 
