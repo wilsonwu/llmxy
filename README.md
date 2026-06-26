@@ -15,6 +15,20 @@ AI Token gateway / dispatcher. Three sub-projects in the same repo:
 | api | OpenAI-compatible `/v1/chat/completions` `/v1/embeddings` `/v1/models`; auth, billing, rate limiting; direct connections to OpenAI / Anthropic / Gemini |
 | envoy front-proxy | Optional: per-instance Envoy spawned & managed from admin. Handles the `/v1/*` hot path in C++ (ext_authz callback to api, gRPC ALS for usage→billing). Anthropic/Gemini/Azure are routed back to an internal `translator` endpoint so the Lua usage filter sees uniform OpenAI-shape responses. |
 
+## Interface examples
+
+### Website console
+
+![Website overview](docs/website-overview.png)
+
+![Website models](docs/website-models.png)
+
+### Admin console
+
+![Admin usage and billing](docs/admin-usage-billing.png)
+
+![Admin smart routing](docs/admin-smart-routing.png)
+
 ## Quick start
 
 ```bash
