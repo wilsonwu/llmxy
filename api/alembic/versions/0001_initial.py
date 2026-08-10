@@ -156,7 +156,7 @@ def upgrade() -> None:
         sa.Column("user_facing_model", sa.String(128), unique=True, index=True),
         sa.Column("modality", sa.String(16), nullable=False, server_default="chat"),
         sa.Column("exposed_protocols", sa.JSON, nullable=False, server_default=sa.text("'[\"openai.chat\"]'")),
-        sa.Column("strategy", sa.Enum("weighted", "smart", name="routestrategy"), server_default="weighted"),
+        sa.Column("strategy", sa.Enum("weighted", "round_robin", "smart", name="routestrategy"), server_default="weighted"),
         sa.Column("targets_jsonb", sa.JSON),
         sa.Column("fallback_model_id", sa.Integer, sa.ForeignKey("models.id", ondelete="SET NULL"), nullable=True),
         sa.Column("smart_rules_jsonb", sa.JSON, server_default=sa.text("'[]'")),

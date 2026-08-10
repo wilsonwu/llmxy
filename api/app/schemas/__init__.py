@@ -193,7 +193,7 @@ class RoutePolicyIn(BaseModel):
     user_facing_model: str
     modality: str = "chat"  # chat | embedding | image
     exposed_protocols: list[str] = Field(default_factory=lambda: ["openai.chat"])
-    strategy: Literal["weighted", "smart"] = "weighted"
+    strategy: Literal["weighted", "round_robin", "smart"] = "weighted"
     targets_jsonb: list[RouteTarget] = []
     fallback_model_id: Optional[int] = None
     smart_rules_jsonb: list[RouteRule] = []

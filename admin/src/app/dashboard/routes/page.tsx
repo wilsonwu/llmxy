@@ -17,7 +17,7 @@ type ExposedProtocol = "openai.chat" | "openai.responses" | "anthropic.messages"
 type R = {
   id?: number;
   user_facing_model: string;
-  strategy: "weighted" | "smart";
+  strategy: "weighted" | "round_robin" | "smart";
   targets_jsonb: Target[];
   fallback_model_id?: number | null;
   smart_rules_jsonb?: Rule[];
@@ -53,6 +53,10 @@ const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
   weighted: {
     title: "weighted — weighted random split",
     body: "Pick one primary target by weighted random sampling. Optionally retry one selected fallback model if that primary fails.",
+  },
+  round_robin: {
+    title: "round robin — ordered rotation",
+    body: "Rotate through available targets in configuration order. API-direct and Envoy share the cursor; optional fallback retry behaves like weighted routing.",
   },
   smart: {
     title: "smart — pick by prompt content",
@@ -212,7 +216,9 @@ export default function RoutesPage() {
         <div className="flex min-w-0 flex-wrap gap-1">
           {r.targets_jsonb.map((target, index) => renderTargetChip(
             target,
-            `${modelLabel(target.model_id)} · w${target.weight}`,
+            r.strategy === "round_robin"
+              ? `${index + 1}. ${modelLabel(target.model_id)}`
+              : `${modelLabel(target.model_id)} · w${target.weight}`,
             index,
           ))}
         </div>
@@ -247,7 +253,7 @@ export default function RoutesPage() {
         </div>
       </div>
 
-      <div className="card grid gap-2 text-xs md:grid-cols-2">
+      <div className="card grid gap-2 text-xs md:grid-cols-3">
         {(Object.keys(STRATEGY_DESC) as R["strategy"][]).map((s) => (
           <div key={s} className="rounded border p-2">
             <div className="mb-1 font-semibold">{STRATEGY_DESC[s].title}</div>
@@ -642,6 +648,7 @@ export default function RoutesPage() {
                   setEditing({ ...e, strategy });
                 }}>
                 <option value="weighted">weighted</option>
+                <option value="round_robin">round robin</option>
                 <option value="smart">smart</option>
               </select>
               <p className="mt-1 text-xs text-gray-500">{STRATEGY_DESC[e.strategy].body}</p>

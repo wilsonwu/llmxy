@@ -40,6 +40,18 @@ def test_route_schema_allows_target_model_as_fallback():
     assert route.fallback_model_id == 1
 
 
+def test_route_schema_allows_round_robin_with_optional_fallback():
+    route = RoutePolicyIn(
+        user_facing_model="round-robin-model",
+        strategy="round_robin",
+        targets_jsonb=[{"model_id": 1}, {"model_id": 2}],
+        fallback_model_id=3,
+    )
+
+    assert route.strategy == "round_robin"
+    assert route.fallback_model_id == 3
+
+
 def test_route_schema_allows_smart_without_fallback_and_with_unlabeled_default():
     route = RoutePolicyIn(
         user_facing_model="smart-with-default",
@@ -484,6 +496,69 @@ async def test_route_loaders_include_fallback_outside_targets(loader):
 
 
 @pytest.mark.asyncio
+async def test_round_robin_cursor_is_shared_by_api_direct_and_envoy_loaders(monkeypatch):
+    class FakeRedis:
+        def __init__(self):
+            self.cursor = 0
+            self.keys: list[str] = []
+
+        async def incr(self, key: str):
+            self.keys.append(key)
+            self.cursor += 1
+            return self.cursor
+
+    policy = SimpleNamespace(
+        id=705,
+        user_facing_model="shared-round-robin",
+        strategy=RouteStrategy.round_robin,
+        enabled=True,
+        scope=RouteScope.public,
+        targets_jsonb=[{"model_id": 1}, {"model_id": 2}],
+        fallback_model_id=None,
+    )
+    models = [_model(1), _model(2)]
+    channels = [_channel(1)]
+
+    class Result:
+        def __init__(self, *, one=None, rows=None):
+            self.one = one
+            self.rows = rows or []
+
+        def scalar_one_or_none(self):
+            return self.one
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class FakeDB:
+        def __init__(self):
+            self.call_count = 0
+
+        async def execute(self, _statement):
+            self.call_count += 1
+            if self.call_count == 1:
+                return Result(one=policy)
+            if self.call_count == 2:
+                return Result(rows=models)
+            return Result(rows=channels)
+
+    redis = FakeRedis()
+    monkeypatch.setattr("app.services.providers.router.get_redis", lambda: redis, raising=False)
+    direct_policy, direct_models, direct_channels = await load_api_route(FakeDB(), "shared-round-robin")
+    envoy_policy, envoy_models, envoy_channels = await load_envoy_route(FakeDB(), "shared-round-robin")
+
+    direct_decision = await select_route(direct_policy, direct_models, direct_channels)
+    envoy_decision = await select_route(envoy_policy, envoy_models, envoy_channels)
+
+    assert direct_decision is not None and direct_decision.model.id == 1
+    assert envoy_decision is not None and envoy_decision.model.id == 2
+    assert redis.keys == ["llmxy:route:round_robin:705"] * 2
+
+
+@pytest.mark.asyncio
 async def test_weighted_route_without_fallback_selects_only_primary(monkeypatch):
     monkeypatch.setattr("app.services.providers.router.random.uniform", lambda _start, _end: 0.1)
     policy = SimpleNamespace(
@@ -564,6 +639,134 @@ async def test_weighted_route_does_not_retry_fallback_selected_as_primary(monkey
 
     assert decision is not None
     assert decision.model.id == 2
+    assert decision.fallback_chain == []
+
+
+@pytest.mark.asyncio
+async def test_round_robin_selects_available_targets_in_order_and_wraps(monkeypatch):
+    class FakeRedis:
+        def __init__(self):
+            self.cursor = 0
+            self.keys: list[str] = []
+
+        async def incr(self, key: str):
+            self.keys.append(key)
+            self.cursor += 1
+            return self.cursor
+
+    redis = FakeRedis()
+    monkeypatch.setattr("app.services.providers.router.get_redis", lambda: redis, raising=False)
+    policy = SimpleNamespace(
+        id=701,
+        user_facing_model="round-robin-model",
+        strategy="round_robin",
+        targets_jsonb=[
+            {"model_id": 1},
+            {"model_id": 2},
+            {"model_id": 3},
+        ],
+        fallback_model_id=4,
+    )
+    models = {i: _model(i) for i in range(1, 5)}
+    channels = {1: _channel(1)}
+
+    decisions = [await select_route(policy, models, channels) for _ in range(4)]
+
+    assert [decision.model.id for decision in decisions if decision] == [1, 2, 3, 1]
+    assert [
+        [model.id for model, _ in decision.fallback_chain]
+        for decision in decisions
+        if decision
+    ] == [[4], [4], [4], [4]]
+    assert redis.keys == ["llmxy:route:round_robin:701"] * 4
+
+
+@pytest.mark.asyncio
+async def test_round_robin_skips_duplicate_and_disabled_targets(monkeypatch):
+    class FakeRedis:
+        def __init__(self):
+            self.cursor = 0
+
+        async def incr(self, _key: str):
+            self.cursor += 1
+            return self.cursor
+
+    redis = FakeRedis()
+    monkeypatch.setattr(
+        "app.services.providers.router.get_redis",
+        lambda: redis,
+        raising=False,
+    )
+    policy = SimpleNamespace(
+        id=702,
+        user_facing_model="round-robin-filtered",
+        strategy="round_robin",
+        targets_jsonb=[
+            {"model_id": 1},
+            {"model_id": 1},
+            {"model_id": 2},
+            {"model_id": 3},
+        ],
+        fallback_model_id=None,
+    )
+    models = {1: _model(1), 2: _model(2), 3: _model(3)}
+    models[2].enabled = False
+    channels = {1: _channel(1)}
+
+    first = await select_route(policy, models, channels)
+    second = await select_route(policy, models, channels)
+
+    assert first is not None and first.model.id == 1
+    assert second is not None and second.model.id == 3
+
+
+@pytest.mark.asyncio
+async def test_round_robin_uses_local_cursor_when_redis_fails(monkeypatch):
+    class FailingRedis:
+        async def incr(self, _key: str):
+            raise ConnectionError("redis unavailable")
+
+    monkeypatch.setattr("app.services.providers.router.get_redis", lambda: FailingRedis(), raising=False)
+    policy = SimpleNamespace(
+        id=704,
+        user_facing_model="round-robin-local-fallback",
+        strategy="round_robin",
+        targets_jsonb=[{"model_id": 1}, {"model_id": 2}],
+        fallback_model_id=3,
+    )
+    models = {i: _model(i) for i in range(1, 4)}
+    channels = {1: _channel(1)}
+
+    first = await select_route(policy, models, channels)
+    second = await select_route(policy, models, channels)
+
+    assert first is not None and first.model.id == 1
+    assert second is not None and second.model.id == 2
+    assert [model.id for model, _ in first.fallback_chain] == [3]
+    assert [model.id for model, _ in second.fallback_chain] == [3]
+
+
+@pytest.mark.asyncio
+async def test_round_robin_does_not_retry_fallback_selected_as_primary(monkeypatch):
+    class FakeRedis:
+        async def incr(self, _key: str):
+            return 1
+
+    monkeypatch.setattr("app.services.providers.router.get_redis", lambda: FakeRedis(), raising=False)
+    policy = SimpleNamespace(
+        id=703,
+        user_facing_model="round-robin-dedup",
+        strategy="round_robin",
+        targets_jsonb=[{"model_id": 1}, {"model_id": 2}],
+        fallback_model_id=1,
+    )
+    models = {1: _model(1), 2: _model(2)}
+    channels = {1: _channel(1)}
+
+    decision = await select_route(policy, models, channels)
+
+    assert decision is not None
+    assert decision.model.id == 1
     assert decision.fallback_chain == []
 
 

@@ -65,6 +65,7 @@ class PaymentChannel(str, enum.Enum):
 
 class RouteStrategy(str, enum.Enum):
     weighted = "weighted"
+    round_robin = "round_robin"
     smart = "smart"
 
 
@@ -269,7 +270,8 @@ class RoutePolicy(Base):
     strategy: Mapped[RouteStrategy] = mapped_column(SAEnum(RouteStrategy), default=RouteStrategy.weighted)
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # targets: [{model_id:int, weight:int, label?:str}]
-    # Both strategies may retry one optional model after the selected primary fails.
+    # Weight drives weighted/smart selection; array order drives round-robin.
+    # All strategies may retry one optional model after the selected primary fails.
     # Smart targets without a label belong to the implicit default label.
     # It may also be present in targets_jsonb; the router skips it when it was
     # already selected as the primary for this request.

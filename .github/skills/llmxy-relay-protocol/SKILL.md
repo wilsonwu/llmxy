@@ -17,8 +17,9 @@ Use this skill for changes that affect how client requests enter `/v1/*`, how ro
 
 2. Trace route selection before touching adapters.
    - `_load_route` rejects disabled, private, wrong-modality, and wrong-protocol routes.
-   - `select_route` handles `weighted` and `smart` strategies.
-   - Both strategies choose one primary target and may retry the optional single `fallback_model_id`; that model may also be a target but must not be attempted twice in one request.
+   - `select_route` handles `weighted`, `round_robin`, and `smart` strategies.
+   - Weighted chooses by weight. Round-robin rotates available targets in configuration order with a Redis atomic cursor shared across API-direct, Envoy, and workers, and fails open to a process-local cursor. Smart chooses within a resolved label.
+   - Every strategy may retry the optional single `fallback_model_id`; that model may also be a target but must not be attempted twice in one request.
    - Smart rules may pick a target label by preset, token count, keyword, code block, geo, or embedding classifier. Targets without a label belong to `default`, which handles unmatched selection. An optional fallback handles primary failure only.
 
 3. Resolve protocol and connector separately.

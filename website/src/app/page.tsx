@@ -16,7 +16,7 @@ export default function Home() {
       </section>
       <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <Feature title="Unified API" desc="Fully compatible with OpenAI /v1/chat/completions. Migrate without code changes." />
-        <Feature title="Smart routing" desc="Native support for OpenAI / Claude / Gemini, weighted routing with optional fallback." />
+        <Feature title="Smart routing" desc="Native support for OpenAI / Claude / Gemini, weighted and round-robin routing with optional fallback." />
         <Feature title="Usage-based billing" desc="Fine-grained token-level billing, tiered plans, real-time balance lookups." />
       </section>
     </div>

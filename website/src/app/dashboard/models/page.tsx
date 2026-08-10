@@ -316,6 +316,8 @@ export default function ModelsPage() {
               const label = meaningful
                 ? m.strategy === "smart"
                   ? "auto-selected per prompt"
+                  : m.strategy === "round_robin"
+                  ? `${m.target_count} targets, round-robin${m.has_fallback ? ", fallback enabled" : ""}`
                   : `${m.target_count} weighted target${m.target_count === 1 ? "" : "s"}${m.has_fallback ? ", fallback enabled" : ""}`
                 : "single provider";
               const modality = m.modality || "chat";

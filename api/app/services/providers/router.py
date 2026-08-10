@@ -1,22 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.redis import get_redis
 from app.models import Channel, Model, RoutePolicy, RouteStrategy
 from app.services import geo
-from app.services.providers.smart_embedding import EmbeddingUsage, classify as embed_classify
+from app.services.providers.smart_embedding import EmbeddingUsage
+from app.services.providers.smart_embedding import classify as embed_classify
 
 log = logging.getLogger(__name__)
 
 DEFAULT_TARGET_LABEL = "default"
+_ROUND_ROBIN_KEY_PREFIX = "llmxy:route:round_robin"
+_local_round_robin_cursors: defaultdict[str, int] = defaultdict(int)
 
 
 @dataclass
@@ -308,6 +314,36 @@ def _weighted_pick(pairs: list[tuple[Model, Channel, dict]]) -> Optional[tuple[M
     return pairs[-1][0], pairs[-1][1]
 
 
+async def _round_robin_pick(
+    policy: RoutePolicy,
+    pairs: list[tuple[Model, Channel, dict]],
+) -> Optional[tuple[Model, Channel]]:
+    # ext_proc must resolve a concrete model before Envoy enters the translator,
+    # so the shared cursor gives Envoy and API-direct the same rotation.
+    unique_pairs: list[tuple[Model, Channel, dict]] = []
+    seen_model_ids: set[int] = set()
+    for pair in pairs:
+        model_id = pair[0].id
+        if model_id in seen_model_ids:
+            continue
+        seen_model_ids.add(model_id)
+        unique_pairs.append(pair)
+    if not unique_pairs:
+        return None
+
+    policy_key = str(getattr(policy, "id", None) or getattr(policy, "user_facing_model", "unknown"))
+    cursor_key = f"{_ROUND_ROBIN_KEY_PREFIX}:{policy_key}"
+    try:
+        cursor = int(await asyncio.wait_for(get_redis().incr(cursor_key), timeout=0.25)) - 1
+    except Exception as exc:  # noqa: BLE001
+        cursor = _local_round_robin_cursors[cursor_key]
+        _local_round_robin_cursors[cursor_key] = cursor + 1
+        log.warning("round-robin Redis cursor unavailable for route %s: %s", policy_key, exc)
+
+    model, channel, _ = unique_pairs[cursor % len(unique_pairs)]
+    return model, channel
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
@@ -327,6 +363,8 @@ async def select_route(
     if policy.strategy == RouteStrategy.smart:
         ctx = RuleContext(prompt_text=prompt_text or "", client_ip=client_ip)
         primary, chosen_label, embedding_usage = await _smart_pick(policy, pairs, ctx, db)
+    elif policy.strategy == RouteStrategy.round_robin:
+        primary = await _round_robin_pick(policy, pairs)
     else:
         primary = _weighted_pick(pairs)
 
