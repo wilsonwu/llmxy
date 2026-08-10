@@ -5,15 +5,16 @@ Revises:
 Create Date: 2026-05-25
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0001_initial"
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -155,10 +156,10 @@ def upgrade() -> None:
         sa.Column("user_facing_model", sa.String(128), unique=True, index=True),
         sa.Column("modality", sa.String(16), nullable=False, server_default="chat"),
         sa.Column("exposed_protocols", sa.JSON, nullable=False, server_default=sa.text("'[\"openai.chat\"]'")),
-        sa.Column("strategy", sa.Enum("weighted", "smart", "fallback", name="routestrategy"), server_default="weighted"),
+        sa.Column("strategy", sa.Enum("weighted", "smart", name="routestrategy"), server_default="weighted"),
         sa.Column("targets_jsonb", sa.JSON),
+        sa.Column("fallback_model_id", sa.Integer, sa.ForeignKey("models.id", ondelete="SET NULL"), nullable=True),
         sa.Column("smart_rules_jsonb", sa.JSON, server_default=sa.text("'[]'")),
-        sa.Column("smart_default_label", sa.String(64), nullable=True),
         sa.Column("smart_embedding_model_id", sa.Integer, sa.ForeignKey("models.id", ondelete="SET NULL"), nullable=True),
         sa.Column("smart_exemplars_jsonb", sa.JSON, server_default=sa.text("'[]'")),
         sa.Column("smart_score_threshold", sa.Integer, nullable=False, server_default="55"),

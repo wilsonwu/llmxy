@@ -4,7 +4,7 @@ import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 
 type ClientProtocol = "openai.chat" | "openai.responses" | "anthropic.messages";
-type Model = { id: string; modality?: "chat" | "embedding" | "image"; exposed_protocols?: ClientProtocol[]; strategy: string; target_count: number };
+type Model = { id: string; modality?: "chat" | "embedding" | "image"; exposed_protocols?: ClientProtocol[]; strategy: string; target_count: number; has_fallback?: boolean };
 type Key = { id: number; name: string; key_prefix: string; status: string };
 type EnvoyInst = { name: string; mode: string; listen_port: number; proxy_url: string };
 type Transport = {
@@ -312,13 +312,11 @@ export default function ModelsPage() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {models.map((m) => {
-              const meaningful = m.target_count > 1;
+              const meaningful = m.target_count > 1 || m.has_fallback;
               const label = meaningful
                 ? m.strategy === "smart"
                   ? "auto-selected per prompt"
-                  : m.strategy === "fallback"
-                  ? `${m.target_count} providers, ordered fallback`
-                  : `${m.target_count} providers, load-balanced`
+                  : `${m.target_count} weighted target${m.target_count === 1 ? "" : "s"}${m.has_fallback ? ", fallback enabled" : ""}`
                 : "single provider";
               const modality = m.modality || "chat";
               const protocols = modality === "chat" ? routeProtocols(m) : ["openai.chat" as ClientProtocol];

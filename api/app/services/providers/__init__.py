@@ -21,7 +21,13 @@ from app.services.providers.registry import (
     resolve_upstream_protocol,
     run_chat,
 )
-from app.services.providers.router import RouteDecision, extract_prompt_text, parse_usage_from_chunk, select_route
+from app.services.providers.router import (
+    RouteDecision,
+    extract_prompt_text,
+    load_route_resources,
+    parse_usage_from_chunk,
+    select_route,
+)
 
 __all__ = [
     "ChatResult", "ProviderAdapter", "SUPPORTED", "SUPPORTED_CHAT_PROTOCOLS",
@@ -32,5 +38,5 @@ __all__ = [
     "channel_connector", "resolve_upstream_protocol", "resolve_connector_type",
     "resolve_adapter_protocol", "run_chat",
     "SUPPORTED_IMAGE_PROTOCOLS", "get_image_adapter",
-    "RouteDecision", "select_route", "extract_prompt_text", "parse_usage_from_chunk",
+    "RouteDecision", "select_route", "load_route_resources", "extract_prompt_text", "parse_usage_from_chunk",
 ]

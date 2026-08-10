@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.relay.chat import _load_route
+from app.api.relay.chat import _load_route, _record_smart_usage
 from app.core.deps import get_api_key
+from app.core.request_ctx import client_ip
 from app.db.session import get_db
 from app.models import ApiKey, User
 from app.services import providers
@@ -43,7 +44,12 @@ async def images_generations(
 
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(
-        policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+        policy,
+        models_by_id,
+        channels_by_id,
+        prompt_text=prompt_text,
+        client_ip=client_ip(request),
+        db=db,
     )
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no upstream")
@@ -64,6 +70,9 @@ async def images_generations(
     except ImageRelayError as e:
         raise HTTPException(e.status_code, e.body["error"]["message"]) from e
 
+    if code == 200:
+        await _record_smart_usage(db, user, api_key, decision, user_facing_model, request_id)
+    await db.commit()
     if code != 200:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY if code not in (502, 504) else code, str(body))
     return JSONResponse(body)

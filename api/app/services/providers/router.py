@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Channel, Model, RoutePolicy, RouteStrategy
@@ -14,6 +15,8 @@ from app.services import geo
 from app.services.providers.smart_embedding import EmbeddingUsage, classify as embed_classify
 
 log = logging.getLogger(__name__)
+
+DEFAULT_TARGET_LABEL = "default"
 
 
 @dataclass
@@ -35,6 +38,24 @@ class RuleContext:
     client_ip: Optional[str] = None
 
 
+async def load_route_resources(
+    db: AsyncSession,
+    policy: RoutePolicy,
+) -> Optional[tuple[dict[int, Model], dict[int, Channel]]]:
+    target_ids = list(dict.fromkeys(int(target["model_id"]) for target in (policy.targets_jsonb or [])))
+    if not target_ids:
+        return None
+    fallback_model_id = getattr(policy, "fallback_model_id", None)
+    if fallback_model_id is not None and int(fallback_model_id) not in target_ids:
+        target_ids.append(int(fallback_model_id))
+
+    models = (await db.execute(select(Model).where(Model.id.in_(target_ids)))).scalars().all()
+    models_by_id = {model.id: model for model in models}
+    channel_ids = {model.channel_id for model in models}
+    channels = (await db.execute(select(Channel).where(Channel.id.in_(channel_ids)))).scalars().all()
+    return models_by_id, {channel.id: channel for channel in channels}
+
+
 def _ordered_targets(
     policy: RoutePolicy,
     models_by_id: dict[int, Model],
@@ -52,12 +73,12 @@ def _ordered_targets(
     return out
 
 
-def _target_label(target: dict) -> Optional[str]:
+def _target_label(target: dict) -> str:
     label = target.get("label")
     if label is None:
-        return None
+        return DEFAULT_TARGET_LABEL
     normalized = str(label).strip()
-    return normalized or None
+    return normalized or DEFAULT_TARGET_LABEL
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +214,7 @@ def _eval_code_block(rule: dict, ctx: RuleContext) -> Optional[str]:
 def _eval_geo(rule: dict, ctx: RuleContext) -> Optional[str]:
     """Match by country code of the client IP. Silently no-ops when the
     GeoIP DB is unconfigured or the IP isn't resolvable — the route then
-    continues to the next rule / default label."""
+    continues to the next rule, then the implicit default target label."""
     if not ctx.client_ip:
         log.info("geo rule: skipped (no client_ip)")
         return None
@@ -232,15 +253,15 @@ async def _smart_pick(
     pairs: list[tuple[Model, Channel, dict]],
     ctx: RuleContext,
     db: Optional[AsyncSession],
-) -> tuple[list[tuple[Model, Channel]], Optional[str], Optional[EmbeddingUsage]]:
-    """Return (ordered_chain, chosen_label, embedding_usage).
+) -> tuple[Optional[tuple[Model, Channel]], Optional[str], Optional[EmbeddingUsage]]:
+    """Return (primary, chosen_label, embedding_usage).
 
     Mode is mutually exclusive: if `smart_embedding_model_id` is set the
     classifier is the sole decider (rules are ignored even if present);
-    otherwise the rule list decides. Either way, `smart_default_label`
-    catches unmatched requests.
+    otherwise the rule list decides. Unmatched requests use targets without
+    an explicit label, which belong to the implicit `default` label.
     """
-    labels = [label for _, _, t in pairs if (label := _target_label(t))]
+    labels = [_target_label(t) for _, _, t in pairs]
     unique_labels = list(dict.fromkeys(labels))
 
     chosen_label: Optional[str] = None
@@ -258,36 +279,33 @@ async def _smart_pick(
                         )
         else:
             chosen_label = _apply_rules(policy.smart_rules_jsonb or [], ctx)
-    if not chosen_label:
-        chosen_label = policy.smart_default_label
     if chosen_label:
         chosen_label = str(chosen_label).strip() or None
 
     if chosen_label:
         matched = [(m, c, t) for m, c, t in pairs if _target_label(t) == chosen_label]
         if matched:
-            return _weighted_order(matched), chosen_label, embedding_usage
+            return _weighted_pick(matched), chosen_label, embedding_usage
 
-    return _weighted_order(pairs), chosen_label, embedding_usage
+    default_pairs = [(m, c, t) for m, c, t in pairs if _target_label(t) == DEFAULT_TARGET_LABEL]
+    if default_pairs:
+        return _weighted_pick(default_pairs), DEFAULT_TARGET_LABEL, embedding_usage
+
+    return None, chosen_label, embedding_usage
 
 
-def _weighted_order(pairs: list[tuple[Model, Channel, dict]]) -> list[tuple[Model, Channel]]:
+def _weighted_pick(pairs: list[tuple[Model, Channel, dict]]) -> Optional[tuple[Model, Channel]]:
     weights = [max(int(t.get("weight", 1)), 0) for _, _, t in pairs]
-    if sum(weights) <= 0:
-        return [(m, c) for m, c, _ in pairs]
-    chain: list[tuple[Model, Channel]] = []
-    remaining = list(zip(pairs, weights))
-    while remaining:
-        total = sum(w for _, w in remaining)
-        r = random.uniform(0, total)
-        acc = 0.0
-        for i, ((m, c, _), w) in enumerate(remaining):
-            acc += w
-            if r <= acc:
-                chain.append((m, c))
-                remaining.pop(i)
-                break
-    return chain
+    total = sum(weights)
+    if total <= 0:
+        return (pairs[0][0], pairs[0][1]) if pairs else None
+    draw = random.uniform(0, total)
+    accumulated = 0.0
+    for (model, channel, _), weight in zip(pairs, weights):
+        accumulated += weight
+        if draw <= accumulated:
+            return model, channel
+    return pairs[-1][0], pairs[-1][1]
 
 
 # ---------------------------------------------------------------------------
@@ -303,19 +321,22 @@ async def select_route(
     db: AsyncSession | None = None,
 ) -> Optional[RouteDecision]:
     pairs = _ordered_targets(policy, models_by_id, channels_by_id)
-    if not pairs:
-        return None
 
     chosen_label: Optional[str] = None
     embedding_usage: Optional[EmbeddingUsage] = None
-    if policy.strategy == RouteStrategy.fallback:
-        pairs.sort(key=lambda x: int(x[2].get("fallback_order", 0)))
-        chain = [(m, c) for m, c, _ in pairs]
-    elif policy.strategy == RouteStrategy.smart:
+    if policy.strategy == RouteStrategy.smart:
         ctx = RuleContext(prompt_text=prompt_text or "", client_ip=client_ip)
-        chain, chosen_label, embedding_usage = await _smart_pick(policy, pairs, ctx, db)
+        primary, chosen_label, embedding_usage = await _smart_pick(policy, pairs, ctx, db)
     else:
-        chain = _weighted_order(pairs)
+        primary = _weighted_pick(pairs)
+
+    chain = [primary] if primary else []
+    fallback_model_id = getattr(policy, "fallback_model_id", None)
+    if fallback_model_id and (not primary or int(fallback_model_id) != primary[0].id):
+        fallback_model = models_by_id.get(int(fallback_model_id))
+        fallback_channel = channels_by_id.get(fallback_model.channel_id) if fallback_model else None
+        if fallback_model and fallback_model.enabled and fallback_channel and fallback_channel.enabled:
+            chain.append((fallback_model, fallback_channel))
 
     if not chain:
         return None

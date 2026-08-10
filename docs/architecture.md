@@ -27,7 +27,7 @@ flowchart LR
   - Auth: email + password + JWT; `/v1/*` requests are authenticated by the `sk-` API key.
   - **Forwarding**: exposes an OpenAI-compatible protocol; internally translates requests to the upstream's native protocol via `services/providers/*` and translates responses (including SSE) back into OpenAI format.
   - Billing: converts tokens to `cost_cents` using `models.prompt_rate / completion_rate` and deducts `users.balance_cents` inside the transaction.
-  - Routing: picks a `model` from `route_policies` (weighted / fallback; smart degrades to weighted).
+  - Routing: picks a `model` from `route_policies` using weighted or smart selection; either strategy may optionally retry one fallback model.
   - Rate limiting: per-minute bucket maintained in Redis.
 
 ## Provider adapter layer
@@ -51,7 +51,7 @@ Each adapter implements:
 - `embeddings(channel, upstream_model, payload)` → implemented for OpenAI / Gemini; Anthropic returns 501.
 
 `registry.py` resolves the semantic protocol from `Model.upstream_protocol` or `Channel.provider_type`, then picks the adapter from `Channel.connector_type`.
-`router.py` implements `select_route(policy, models, channels)`; weighted / fallback order determines the primary + fallback chain.
+`router.py` implements `select_route(policy, models, channels)`. Weighted routes choose one primary by weight. Smart routes resolve a label and choose one weighted primary within it; unlabeled targets form the implicit `default` group for unmatched requests. Either strategy may optionally retry one configured fallback model after primary failure.
 
 ## Database tables
 
@@ -68,9 +68,8 @@ Each adapter implements:
 
 ## Routing strategies
 
-- `weighted` — weighted random over targets; on failure fall back to the next entry in the chain
-- `fallback` — strict ordering by `fallback_order`
-- `smart` — currently equivalent to `weighted` (enum reserved for richer selection later)
+- `weighted` — weighted random selection over targets; an optional `fallback_model_id` retries one model if the selected primary fails
+- `smart` — rules or an embedding classifier resolve a label and select one weighted primary; unlabeled targets are `default`, and an optional `fallback_model_id` retries after primary failure
 
 ## Billing
 

@@ -47,8 +47,11 @@ async def _validate_modality(db: AsyncSession, req: RoutePolicyIn) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "only chat routes can expose non-openai protocols")
     target_ids = [t.model_id for t in req.targets_jsonb]
     if not target_ids:
-        return
-    models = (await db.execute(select(Model).where(Model.id.in_(target_ids)))).scalars().all()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "route must have at least one target model")
+    model_ids = set(target_ids)
+    if req.fallback_model_id is not None:
+        model_ids.add(req.fallback_model_id)
+    models = (await db.execute(select(Model).where(Model.id.in_(model_ids)))).scalars().all()
     by_id = {m.id: m for m in models}
     for t in req.targets_jsonb:
         m = by_id.get(t.model_id)
@@ -59,6 +62,18 @@ async def _validate_modality(db: AsyncSession, req: RoutePolicyIn) -> None:
                 status.HTTP_400_BAD_REQUEST,
                 f"target model {m.code!r} is kind={m.kind!r}, expected {req.modality!r}",
             )
+    if req.fallback_model_id is not None:
+        fallback_model = by_id.get(req.fallback_model_id)
+        if fallback_model is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"fallback model {req.fallback_model_id} not found",
+            )
+        if (fallback_model.kind or "chat") != req.modality:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"fallback model {fallback_model.code!r} is kind={fallback_model.kind!r}, expected {req.modality!r}",
+            )
 
 
 def _to_orm(req: RoutePolicyIn) -> dict:
@@ -68,8 +83,8 @@ def _to_orm(req: RoutePolicyIn) -> dict:
         "exposed_protocols": list(dict.fromkeys(normalize_protocol(p, kind=req.modality) for p in (req.exposed_protocols or ["openai"]))),
         "strategy": RouteStrategy(req.strategy),
         "targets_jsonb": [t.model_dump() for t in req.targets_jsonb],
+        "fallback_model_id": req.fallback_model_id,
         "smart_rules_jsonb": [r.model_dump(exclude_none=True) for r in req.smart_rules_jsonb],
-        "smart_default_label": req.smart_default_label,
         "smart_embedding_model_id": req.smart_embedding_model_id,
         "smart_exemplars_jsonb": [e.model_dump() for e in req.smart_exemplars_jsonb],
         "smart_score_threshold": req.smart_score_threshold,

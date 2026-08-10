@@ -178,14 +178,11 @@ async def _load_route(db: AsyncSession, user_facing_model: str) -> tuple[RoutePo
     ).scalar_one_or_none()
     if not policy or not policy.enabled or policy.scope == RouteScope.private:
         raise ValueError(f"model {user_facing_model} not available")
-    target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
-    if not target_ids:
+    resources = await providers.load_route_resources(db, policy)
+    if resources is None:
         raise RuntimeError("route has no targets")
-    models = (await db.execute(select(Model).where(Model.id.in_(target_ids)))).scalars().all()
-    models_by_id = {m.id: m for m in models}
-    channel_ids = {m.channel_id for m in models}
-    channels = (await db.execute(select(Channel).where(Channel.id.in_(channel_ids)))).scalars().all()
-    return policy, models_by_id, {c.id: c for c in channels}
+    models_by_id, channels_by_id = resources
+    return policy, models_by_id, channels_by_id
 
 
 def _prompt_text(client_protocol: str, payload: Any) -> str:
@@ -283,6 +280,8 @@ async def _decide(headers: dict[str, str], body: bytes) -> tuple[int, str] | dic
         }
         if expected_modality == "chat":
             out["x-llmxy-chat-chain"] = ",".join(f"{mm.id}:{cc.id}" for mm, cc in pairs)
+        if expected_modality == "embedding":
+            out["x-llmxy-embedding-chain"] = ",".join(f"{mm.id}:{cc.id}" for mm, cc in pairs)
         if decision.chosen_label:
             out["x-llmxy-resolved-label"] = decision.chosen_label
         if m.kind == "image":

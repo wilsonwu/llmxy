@@ -90,7 +90,7 @@ docker compose up -d postgres redis
 cd api
 pip install -e .
 
-# DB migrations (first run + after any model change)
+# DB migrations (first run; reset the dev schema first after model changes)
 alembic upgrade head
 
 # Seed admin + free plan + demo channel/model/route; idempotent.
@@ -103,12 +103,15 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 Swagger: http://localhost:8000/docs · Health: http://localhost:8000/healthz
 
-Create a new Alembic migration after editing `app/models/`:
+During the current development phase, keep all schema changes in the single initial migration:
 ```bash
 cd api
-alembic revision --autogenerate -m "describe change"
+# Edit alembic/versions/0001_initial.py directly. Do not create 0002+ yet.
+# Reset/recreate the development database or schema so 0001 runs again.
 alembic upgrade head
 ```
+
+`alembic upgrade head` alone does not replay an already-applied `0001`.
 
 Run backend tests:
 ```bash

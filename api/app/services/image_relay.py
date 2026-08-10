@@ -66,8 +66,9 @@ async def execute_image_relay(
     select_route. We try each upstream in turn (mirroring the chat relay's
     failover), placing a per-attempt hold so a failing upstream never leaves
     funds locked. The first upstream that returns images wins; if all fail a
-    single failure UsageLog (cost 0) is written. Commits the transaction.
-    Returns (status_code, body) to hand back to the client.
+    single failure UsageLog (cost 0) is written. The caller commits so smart
+    classifier usage can share the same transaction. Returns (status_code,
+    body) to hand back to the client.
     """
     if not candidates:
         raise ImageRelayError(502, "no upstream")
@@ -158,7 +159,6 @@ async def execute_image_relay(
                 resolved_label=resolved_label,
             ))
             db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
-            await db.commit()
             return status_code, body
 
         # 4) Failure/timeout/zero images → fully refund this attempt's hold
@@ -190,5 +190,4 @@ async def execute_image_relay(
         resolved_label=resolved_label,
     ))
     db.info.setdefault("_quota_invalidate_uids", set()).add(user.id)
-    await db.commit()
     return last_status, last_body

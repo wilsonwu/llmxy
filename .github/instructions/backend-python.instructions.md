@@ -14,7 +14,7 @@ applyTo:
 - `api/app/api/relay/` serves OpenAI-compatible `sk-` authenticated endpoints: chat, responses, embeddings, images, models, and Anthropic compatibility.
 - `api/app/services/providers/` contains upstream connector adapters and route selection.
 - `api/app/services/protocols/` contains protocol ID and request/response conversion helpers.
-- `api/app/models/__init__.py` is the SQLAlchemy model hub. Alembic migrations live in `api/alembic/versions/`.
+- `api/app/models/__init__.py` is the SQLAlchemy model hub. During development, all schema changes stay in `api/alembic/versions/0001_initial.py`; do not add later revisions until the repository rule is explicitly lifted.
 
 ## Python Style
 
@@ -52,4 +52,4 @@ applyTo:
 - For provider/protocol changes, run or update `tests/test_openai_compat.py` and add focused adapter tests when behavior changes.
 - For billing/quota changes, run or update `tests/test_billing.py` and verify cache invalidation/mirroring behavior by reading the affected helper.
 - For smart routing changes, run or update `tests/test_smart_routing.py`.
-- For model schema changes, create an Alembic migration and verify `cd api && alembic upgrade head`.
+- For model schema changes, edit `0001_initial.py` directly, rebuild/reset the development schema as needed, and verify `cd api && alembic upgrade head`. Do not create `0002` or later revisions.

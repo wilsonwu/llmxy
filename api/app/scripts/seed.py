@@ -75,7 +75,7 @@ async def seed() -> None:
                     user_facing_model="gpt-4o-mini",
                     exposed_protocols=["openai.chat"],
                     strategy=RouteStrategy.weighted,
-                    targets_jsonb=[{"model_id": m.id, "weight": 1, "fallback_order": 0}],
+                    targets_jsonb=[{"model_id": m.id, "weight": 1}],
                     enabled=True,
                 )
             )

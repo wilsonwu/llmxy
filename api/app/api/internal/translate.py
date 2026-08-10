@@ -21,6 +21,7 @@ import uuid
 from app.models import ApiKey, Channel, Model, RoutePolicy, RouteScope, UsageLog, User
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user
+from app.services.embedding_relay import EmbeddingRelayError, execute_embedding_relay
 from app.services.image_relay import ImageRelayError, execute_image_relay
 from app.services.protocols.chat import (
     OpenAIToAnthropicStream,
@@ -71,7 +72,7 @@ async def _load_channel(db: AsyncSession, channel_id: str | None) -> Channel:
     return ch
 
 
-async def _load_chat_candidates(
+async def _load_candidates(
     db: AsyncSession,
     *,
     chain_header: str | None,
@@ -219,7 +220,7 @@ async def chat_completions(
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        candidates = await _load_chat_candidates(
+        candidates = await _load_candidates(
             db,
             chain_header=x_llmxy_chat_chain,
             fallback_model_id=x_llmxy_model_id,
@@ -338,7 +339,7 @@ async def responses(
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        candidates = await _load_chat_candidates(
+        candidates = await _load_candidates(
             db,
             chain_header=x_llmxy_chat_chain,
             fallback_model_id=x_llmxy_model_id,
@@ -466,7 +467,7 @@ async def messages(
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        candidates = await _load_chat_candidates(
+        candidates = await _load_candidates(
             db,
             chain_header=x_llmxy_chat_chain,
             fallback_model_id=x_llmxy_model_id,
@@ -574,33 +575,75 @@ async def messages(
 async def embeddings(
     request: Request,
     x_llmxy_channel_id: str | None = Header(None),
+    x_llmxy_model_id: str | None = Header(None),
+    x_llmxy_user_id: str | None = Header(None),
+    x_llmxy_api_key_id: str | None = Header(None),
+    x_llmxy_user_facing_model: str | None = Header(None),
     x_llmxy_upstream_model: str | None = Header(None),
     x_llmxy_upstream_protocol: str | None = Header(None),
     x_llmxy_connector_type: str | None = Header(None),
+    x_llmxy_embedding_chain: str | None = Header(None),
+    x_llmxy_request_id: str | None = Header(None),
+    x_llmxy_resolved_label: str | None = Header(None),
+    x_llmxy_classifier_model_id: str | None = Header(None),
+    x_llmxy_classifier_upstream_model: str | None = Header(None),
+    x_llmxy_classifier_prompt_tokens: str | None = Header(None),
+    x_llmxy_classifier_latency_ms: str | None = Header(None),
+    x_llmxy_classifier_status: str | None = Header(None),
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        channel = await _load_channel(db, x_llmxy_channel_id)
-        protocol = providers.resolve_upstream_protocol(None, channel, x_llmxy_upstream_protocol)
-        connector = providers.resolve_connector_type(None, channel, x_llmxy_connector_type)
-        adapter = providers.get_connector_adapter(connector)
-        if not adapter:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no connector adapter for {connector}")
-        if not providers.connector_supports_protocol(connector, protocol):
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"connector {connector} does not support protocol {protocol}")
-        if not x_llmxy_upstream_model:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing x-llmxy-upstream-model")
+        loaded = await _load_candidates(
+            db,
+            chain_header=x_llmxy_embedding_chain,
+            fallback_model_id=x_llmxy_model_id,
+            fallback_channel_id=x_llmxy_channel_id,
+            fallback_upstream_model=x_llmxy_upstream_model,
+        )
+        candidates = [
+            (model, channel)
+            for model, channel, _ in loaded
+            if model is not None and model.kind == "embedding"
+        ]
+        if not candidates:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no embedding upstream")
         try:
             payload = await request.json()
         except Exception:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid json body")
+        started = time.time()
+        request_id = x_llmxy_request_id or f"req-{uuid.uuid4().hex[:16]}"
         try:
-            status_code, body = await adapter.embeddings(channel, x_llmxy_upstream_model, payload)
-        except Exception as e:
-            log.warning("translator embeddings error: %s", e)
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
-        if status_code != 200:
-            raise HTTPException(status_code, str(body))
+            body, selected_model, _ = await execute_embedding_relay(candidates, payload)
+        except EmbeddingRelayError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        user, api_key, _ = await _billing_context(
+            db,
+            user_id=x_llmxy_user_id,
+            api_key_id=x_llmxy_api_key_id,
+            model_id=str(selected_model.id),
+        )
+        usage = body.get("usage") or {}
+        await _bill_chat_relay(
+            db,
+            user=user,
+            api_key=api_key,
+            model=selected_model,
+            user_facing_model=x_llmxy_user_facing_model,
+            upstream_model=selected_model.upstream_model,
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=0,
+            started=started,
+            request_id=request_id,
+            resolved_label=x_llmxy_resolved_label,
+            classifier_headers={
+                "model_id": x_llmxy_classifier_model_id,
+                "upstream_model": x_llmxy_classifier_upstream_model,
+                "prompt_tokens": x_llmxy_classifier_prompt_tokens,
+                "latency_ms": x_llmxy_classifier_latency_ms,
+                "status": x_llmxy_classifier_status,
+            },
+        )
         return JSONResponse(body)
 
 
@@ -613,6 +656,13 @@ async def images_generations(
     x_llmxy_api_key_id: str | None = Header(None),
     x_llmxy_user_facing_model: str | None = Header(None),
     x_llmxy_image_chain: str | None = Header(None),
+    x_llmxy_request_id: str | None = Header(None),
+    x_llmxy_resolved_label: str | None = Header(None),
+    x_llmxy_classifier_model_id: str | None = Header(None),
+    x_llmxy_classifier_upstream_model: str | None = Header(None),
+    x_llmxy_classifier_prompt_tokens: str | None = Header(None),
+    x_llmxy_classifier_latency_ms: str | None = Header(None),
+    x_llmxy_classifier_status: str | None = Header(None),
 ):
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
@@ -625,34 +675,27 @@ async def images_generations(
         if x_llmxy_api_key_id and x_llmxy_api_key_id.isdigit():
             api_key = await db.get(ApiKey, int(x_llmxy_api_key_id))
 
-        # Build the failover chain ext_proc resolved. Fall back to the single
-        # model/channel headers if the chain header is absent (older callers).
-        candidates: list[tuple[Model, Channel]] = []
-        chain = x_llmxy_image_chain or ""
-        if chain:
-            for part in chain.split(","):
-                mid, _, cid = part.partition(":")
-                if not (mid.isdigit() and cid.isdigit()):
-                    continue
-                mm = await db.get(Model, int(mid))
-                cc = await db.get(Channel, int(cid))
-                if mm and mm.kind == "image" and cc and cc.enabled:
-                    candidates.append((mm, cc))
+        loaded = await _load_candidates(
+            db,
+            chain_header=x_llmxy_image_chain,
+            fallback_model_id=x_llmxy_model_id,
+            fallback_channel_id=x_llmxy_channel_id,
+            fallback_upstream_model=None,
+        )
+        candidates = [
+            (model, channel)
+            for model, channel, _ in loaded
+            if model is not None and model.enabled and model.kind == "image"
+        ]
         if not candidates:
-            channel = await _load_channel(db, x_llmxy_channel_id)
-            if not x_llmxy_model_id or not x_llmxy_model_id.isdigit():
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "missing or invalid x-llmxy-model-id")
-            model = await db.get(Model, int(x_llmxy_model_id))
-            if not model or model.kind != "image":
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "model is not an image model")
-            candidates = [(model, channel)]
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no image upstream")
 
         try:
             payload = await request.json()
         except Exception:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid json body")
 
-        request_id = f"req-{uuid.uuid4().hex[:16]}"
+        request_id = x_llmxy_request_id or f"req-{uuid.uuid4().hex[:16]}"
         try:
             code, body = await execute_image_relay(
                 db,
@@ -662,10 +705,26 @@ async def images_generations(
                 payload=payload,
                 request_id=request_id,
                 user_facing_model=x_llmxy_user_facing_model or candidates[0][0].code,
+                resolved_label=x_llmxy_resolved_label,
             )
         except ImageRelayError as e:
             raise HTTPException(e.status_code, e.body["error"]["message"]) from e
 
+        if code == 200:
+            await _record_classifier_from_headers(
+                db,
+                user=user,
+                api_key=api_key,
+                user_facing_model=x_llmxy_user_facing_model or candidates[0][0].code,
+                request_id=request_id,
+                resolved_label=x_llmxy_resolved_label,
+                cls_model_id=x_llmxy_classifier_model_id,
+                cls_upstream=x_llmxy_classifier_upstream_model,
+                cls_prompt_tokens=x_llmxy_classifier_prompt_tokens,
+                cls_latency_ms=x_llmxy_classifier_latency_ms,
+                cls_status=x_llmxy_classifier_status,
+            )
+        await db.commit()
         if code != 200:
             raise HTTPException(code if code in (502, 504, 402) else status.HTTP_502_BAD_GATEWAY, str(body))
         return JSONResponse(body)

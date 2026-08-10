@@ -12,7 +12,7 @@
 - PostgreSQL is the source of truth for users, plans, subscriptions, API keys, routes, models, channels, balances, and usage logs. Redis is cache or hot-path mirror state.
 - Billing uses integer cents for balances and transactions. Model token rates are micro-cents per 1K tokens: `cost_cents = ceil((prompt_tokens * prompt_rate + completion_tokens * completion_rate) / 10_000_000)`.
 - Keep `provider_type` / `upstream_protocol` separate from `connector_type`. Protocol is semantic request/response shape such as `openai.chat`, `openai.responses`, `anthropic.messages`, or `gemini.generate_content`; connector is URL/auth/path implementation such as `openai`, `azure_openai`, `anthropic`, or `gemini`.
-- Route policies map a public `user_facing_model` to concrete `Model` targets. Always preserve `modality`, `exposed_protocols`, target weights, fallback order, labels, and `scope` semantics.
+- Route policies map a public `user_facing_model` to concrete `Model` targets. Always preserve `modality`, `exposed_protocols`, target weights, labels, and `scope` semantics. Smart targets without a label belong to the implicit `default` label used for unmatched selection. Weighted and smart routes may configure one optional fallback model for failed primaries; it may also appear among targets but must not be attempted twice in one request.
 - Envoy is optional and never silently redirects clients. Clients choose `api-direct` via `:8000` or Envoy via `:9000-9099` / remote Envoy URLs.
 
 ## Backend Conventions
@@ -20,7 +20,7 @@
 - Backend code is Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy async, Alembic, Redis, and httpx. Keep I/O async and use `AsyncSession` patterns already present in `api/app/`.
 - Router split: `api/app/api/v1/` for user platform APIs, `api/app/api/v1/admin/` for admin APIs, `api/app/api/relay/` for public OpenAI-compatible relay endpoints, and `api/app/api/internal/` for internal translator callbacks.
 - Provider adapters live in `api/app/services/providers/`; protocol conversion helpers live in `api/app/services/protocols/`; route selection lives in `api/app/services/providers/router.py`.
-- When models or tables change, update SQLAlchemy models and create an Alembic migration. Keep `api/app/scripts/seed.py` idempotent when seed data must change.
+- During the current development phase, `api/alembic/versions/0001_initial.py` is the only migration. When models or tables change, update that file directly; do not create `0002` or later revisions until this rule is explicitly lifted. Rebuild or reset local development schemas as needed. Keep `api/app/scripts/seed.py` idempotent when seed data must change.
 - After balance, quota, subscription, user status, API key status, route, model, or channel mutations, preserve the existing cache invalidation or Redis mirror behavior.
 
 ## Frontend Conventions
@@ -48,5 +48,5 @@
 
 - Keep edits scoped to the touched subsystem. Do not introduce new frameworks, package managers, background workers, or storage layers unless the task requires it.
 - Never commit secrets. `.env` is local; `.env.example` is the documented shape.
-- Do not double-charge relay requests. API-direct billing happens in the relay request path; Envoy billing is ingested asynchronously from ALS usage events.
+- Do not double-charge relay requests. API-direct billing happens in the relay request path. Envoy translator-backed requests carry `x-llmxy-billed-sync=true` and bill after the successful upstream call in the translator; ALS skips marked requests and bills only unmarked Envoy paths.
 - When touching relay protocols, billing, quota, route selection, or provider adapters, add or update focused backend tests first-class with the existing tests.

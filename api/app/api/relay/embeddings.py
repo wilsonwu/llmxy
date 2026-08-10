@@ -9,10 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.relay.chat import _load_route, _record_smart_usage
 from app.core.deps import get_api_key
+from app.core.request_ctx import client_ip
 from app.db.session import get_db
 from app.models import ApiKey, UsageLog, User
 from app.services import providers
 from app.services.billing import calc_cost_cents, charge_user, has_quota
+from app.services.embedding_relay import EmbeddingRelayError, execute_embedding_relay
 
 router = APIRouter(prefix="/v1", tags=["relay"])
 
@@ -36,31 +38,30 @@ async def embeddings(
     )
     prompt_text = providers.extract_prompt_text(payload)
     decision = await providers.select_route(
-        policy, models_by_id, channels_by_id, prompt_text=prompt_text, db=db,
+        policy,
+        models_by_id,
+        channels_by_id,
+        prompt_text=prompt_text,
+        client_ip=client_ip(request),
+        db=db,
     )
     if not decision:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "no upstream")
 
-    connector = providers.resolve_connector_type(decision.model, decision.channel)
-    protocol = providers.resolve_upstream_protocol(decision.model, decision.channel)
-    adapter = providers.get_connector_adapter(connector)
-    if not adapter:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"no connector adapter for {connector}")
-    if not providers.connector_supports_protocol(connector, protocol):
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"connector {connector} does not support protocol {protocol}")
-
     request_id = f"req-{uuid.uuid4().hex[:16]}"
     started = time.time()
-    code, body = await adapter.embeddings(decision.channel, decision.model.upstream_model, payload)
-    if code != 200:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(body))
+    candidates = [(decision.model, decision.channel)] + decision.fallback_chain
+    try:
+        body, selected_model, _ = await execute_embedding_relay(candidates, payload)
+    except EmbeddingRelayError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
     usage = (body or {}).get("usage") or {}
     pt = usage.get("prompt_tokens", 0)
-    cost = calc_cost_cents(decision.model, pt, 0)
+    cost = calc_cost_cents(selected_model, pt, 0)
     await charge_user(db, user, api_key, cost, ref_id=request_id, note=user_facing_model)
     db.add(UsageLog(
-        user_id=user.id, api_key_id=api_key.id, model_id=decision.model.id,
-        user_facing_model=user_facing_model, upstream_model=decision.model.upstream_model,
+        user_id=user.id, api_key_id=api_key.id, model_id=selected_model.id,
+        user_facing_model=user_facing_model, upstream_model=selected_model.upstream_model,
         prompt_tokens=pt, completion_tokens=0, cost_cents=cost,
         latency_ms=int((time.time() - started) * 1000),
         status="ok", request_id=request_id,

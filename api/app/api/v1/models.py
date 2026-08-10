@@ -35,6 +35,7 @@ async def list_models(
             "exposed_protocols": route_protocols(r),
             "strategy": r.strategy.value if hasattr(r.strategy, "value") else r.strategy,
             "target_count": len(r.targets_jsonb or []),
+            "has_fallback": r.fallback_model_id is not None,
         }
         for r in rows
     ]

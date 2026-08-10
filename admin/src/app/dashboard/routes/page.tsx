@@ -5,7 +5,7 @@ import { api, fetcher } from "@/lib/api";
 import { COUNTRIES, COUNTRY_NAME } from "@/lib/countries";
 import { Badge, EmptyState, IconButton, ListActions, ListCell, ListMeta, Modal, TableSkeleton, useToast } from "@/components/ui";
 
-type Target = { model_id: number; weight: number; fallback_order: number; label?: string | null };
+type Target = { model_id: number; weight: number; label?: string | null };
 type Rule =
   | { type: "preset"; id: string; label: string }
   | { type: "tokens"; threshold: number; gt_label: string; lte_label: string }
@@ -17,10 +17,10 @@ type ExposedProtocol = "openai.chat" | "openai.responses" | "anthropic.messages"
 type R = {
   id?: number;
   user_facing_model: string;
-  strategy: "weighted" | "smart" | "fallback";
+  strategy: "weighted" | "smart";
   targets_jsonb: Target[];
+  fallback_model_id?: number | null;
   smart_rules_jsonb?: Rule[];
-  smart_default_label?: string | null;
   smart_embedding_model_id?: number | null;
   smart_exemplars_jsonb?: Exemplar[];
   smart_score_threshold?: number;
@@ -38,8 +38,8 @@ const empty: R = {
   user_facing_model: "",
   strategy: "weighted",
   targets_jsonb: [],
+  fallback_model_id: null,
   smart_rules_jsonb: [],
-  smart_default_label: null,
   smart_embedding_model_id: null,
   smart_exemplars_jsonb: [],
   smart_score_threshold: 55,
@@ -52,16 +52,12 @@ const empty: R = {
 const STRATEGY_DESC: Record<R["strategy"], { title: string; body: string }> = {
   weighted: {
     title: "weighted — weighted random split",
-    body: "Pick the primary target by weighted random sampling; remaining targets form a weighted-random fallback chain. Good for cost-splitting across channels, A/B rollouts, and balancing rate limits across multiple keys. Config: just set weight.",
-  },
-  fallback: {
-    title: "fallback — priority + ordered failover",
-    body: "Sort by order ascending — the first is primary, the rest are fallbacks in order. Good for \"prefer the cheap channel, switch to the expensive one when it fails\" — scenarios with explicit priority. Config: just set order.",
+    body: "Pick one primary target by weighted random sampling. Optionally retry one selected fallback model if that primary fails.",
   },
   smart: {
     title: "smart — pick by prompt content",
     body:
-      "Pick one deciding mechanism: either rules (zero-cost, ordered, built-in presets) or an embedding classifier (semantic match against exemplar prompts). Each resolved label can route to one or more weighted targets; unmatched requests fall through to the default label.",
+      "Pick one deciding mechanism: rules or an embedding classifier. A resolved label selects one weighted target; unmatched requests use the default target group. Fallback retry is optional.",
   },
 };
 
@@ -106,14 +102,12 @@ export default function RoutesPage() {
     payload.exposed_protocols = payload.modality === "chat" ? protocols : [payload.modality === "image" ? "openai.images" : "openai.embeddings"];
     if (r.strategy !== "smart") {
       payload.smart_rules_jsonb = [];
-      payload.smart_default_label = null;
       payload.smart_embedding_model_id = null;
       payload.smart_exemplars_jsonb = [];
     } else {
-      payload.smart_default_label = DEFAULT_LABEL;
       payload.targets_jsonb = payload.targets_jsonb.map((t) => ({
         ...t,
-        label: (t.label || DEFAULT_LABEL).trim() || DEFAULT_LABEL,
+        label: (t.label || "").trim() || null,
       }));
     }
     try {
@@ -164,7 +158,7 @@ export default function RoutesPage() {
     return `${m.code} — ${m.display_name} · upstream ${protocolLabel(effectiveProtocol(m))} via ${connectorLabel(effectiveConnector(m))} · ${m.upstream_model}${disabled}`;
   };
 
-  const targetLabel = (target: Target) => (target.label || DEFAULT_LABEL).trim() || DEFAULT_LABEL;
+  const targetLabel = (target: Target) => (target.label || "").trim() || DEFAULT_LABEL;
 
   const renderTargetChip = (target: Target, text: string, key: string | number) => {
     const model = modelById(target.model_id);
@@ -200,18 +194,38 @@ export default function RoutesPage() {
               {(groups.get(label) || []).map((target, index) => renderTargetChip(target, `${modelLabel(target.model_id)} · w${target.weight}`, `${label}-${index}`))}
             </div>
           ))}
+          {r.fallback_model_id != null && (
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              <Badge tone="warning">fallback</Badge>
+              {renderTargetChip(
+                { model_id: r.fallback_model_id, weight: 0 },
+                modelLabel(r.fallback_model_id),
+                "fallback",
+              )}
+            </div>
+          )}
         </div>
       );
     }
     return (
-      <div className="flex min-w-0 flex-wrap gap-1">
-        {r.targets_jsonb.map((target, index) => renderTargetChip(
-          target,
-          r.strategy === "fallback"
-            ? `${modelLabel(target.model_id)} · o${target.fallback_order}`
-            : `${modelLabel(target.model_id)} · w${target.weight}`,
-          index,
-        ))}
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex min-w-0 flex-wrap gap-1">
+          {r.targets_jsonb.map((target, index) => renderTargetChip(
+            target,
+            `${modelLabel(target.model_id)} · w${target.weight}`,
+            index,
+          ))}
+        </div>
+        {r.fallback_model_id != null && (
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            <Badge tone="warning">fallback</Badge>
+            {renderTargetChip(
+              { model_id: r.fallback_model_id, weight: 0 },
+              modelLabel(r.fallback_model_id),
+              "fallback",
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -233,7 +247,7 @@ export default function RoutesPage() {
         </div>
       </div>
 
-      <div className="card grid gap-2 text-xs md:grid-cols-3">
+      <div className="card grid gap-2 text-xs md:grid-cols-2">
         {(Object.keys(STRATEGY_DESC) as R["strategy"][]).map((s) => (
           <div key={s} className="rounded border p-2">
             <div className="mb-1 font-semibold">{STRATEGY_DESC[s].title}</div>
@@ -263,7 +277,6 @@ export default function RoutesPage() {
                     secondary={
                       <>
                         <Badge tone={r.scope === "private" ? "warning" : "success"}>{r.scope}</Badge>
-                        {r.strategy === "smart" && <ListMeta>default {r.smart_default_label || DEFAULT_LABEL}</ListMeta>}
                       </>
                     }
                   />
@@ -304,7 +317,7 @@ export default function RoutesPage() {
         const e = editing;
         const exemplars = e.smart_exemplars_jsonb || [];
 
-        // Active labels in this route — sourced from rules + exemplars + default.
+        // Active labels in this route are sourced from rules, exemplars, targets, and the implicit default.
         const ruleLabels: string[] = Array.from(new Set([
           ...(e.smart_rules_jsonb || []).flatMap((r: any) => {
             if (r.type === "tokens") return [r.gt_label, r.lte_label];
@@ -315,9 +328,9 @@ export default function RoutesPage() {
           exemplars.map((x) => x.label).filter((s) => typeof s === "string" && s.trim().length > 0),
         ));
         const targetLabels: string[] = e.targets_jsonb
-          .map((t) => (t.label || DEFAULT_LABEL).trim())
+          .map(targetLabel)
           .filter((s) => s.length > 0);
-        const allLabels: string[] = Array.from(new Set([...ruleLabels, ...exemplarLabels, ...targetLabels, ...extraSmartLabels, DEFAULT_LABEL]));
+        const allLabels: string[] = Array.from(new Set([DEFAULT_LABEL, ...ruleLabels, ...exemplarLabels, ...targetLabels, ...extraSmartLabels]));
 
         const nextLabel = (prefix: string): string => {
           const taken = new Set((e.smart_rules_jsonb || []).map((r: any) => r.label).filter(Boolean));
@@ -353,13 +366,13 @@ export default function RoutesPage() {
 
         const availableTargetModels = models?.filter((m) => (m.kind || "chat") === (e.modality || "chat")) || [];
         const firstTargetModelId = availableTargetModels[0]?.id || 0;
+        const storedTargetLabel = (label: string) => label === DEFAULT_LABEL ? null : label;
         const makeTarget = (label?: string): Target => ({
           model_id: firstTargetModelId,
           weight: 1,
-          fallback_order: e.targets_jsonb.length,
-          label: e.strategy === "smart" ? (label || DEFAULT_LABEL) : "",
+          label: e.strategy === "smart" && label ? storedTargetLabel(label) : null,
         });
-        const labelForTarget = (target: Target) => (target.label || DEFAULT_LABEL).trim() || DEFAULT_LABEL;
+        const labelForTarget = targetLabel;
         const addSmartLabel = () => {
           const label = newSmartLabel.trim();
           if (!label) return;
@@ -413,16 +426,13 @@ export default function RoutesPage() {
                           setEditing({ ...e, targets_jsonb: v });
                         }} />
                     )}
-                    {e.strategy === "fallback" && (
-                      <input className="input w-full min-w-0" type="number" placeholder="order" value={t.fallback_order}
-                        onChange={(ev) => {
-                          const v = [...e.targets_jsonb]; v[i] = { ...t, fallback_order: +ev.target.value };
-                          setEditing({ ...e, targets_jsonb: v });
-                        }} />
-                    )}
                     <button className="btn-danger w-full sm:w-auto" onClick={() => {
                       const v = e.targets_jsonb.filter((_, j) => j !== i);
-                      setEditing({ ...e, targets_jsonb: v });
+                      setEditing({
+                        ...e,
+                        targets_jsonb: v,
+                        fallback_model_id: v.length ? e.fallback_model_id : null,
+                      });
                     }}>×</button>
                   </div>
                   {renderTargetMeta(selected)}
@@ -433,7 +443,7 @@ export default function RoutesPage() {
         );
 
         const renderSmartTargets = () => {
-          const smartLabels = Array.from(new Set([DEFAULT_LABEL, ...allLabels]));
+          const smartLabels = allLabels;
           const addModelToLabel = (label: string) => setEditing({
             ...e,
             targets_jsonb: [...e.targets_jsonb, makeTarget(label)],
@@ -491,7 +501,7 @@ export default function RoutesPage() {
                                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_auto] sm:items-center">
                                   <select className="input w-full min-w-0" value={target.model_id} onChange={(ev) => {
                                     const next = [...e.targets_jsonb];
-                                    next[index] = { ...target, model_id: +ev.target.value, label };
+                                    next[index] = { ...target, model_id: +ev.target.value, label: storedTargetLabel(label) };
                                     setEditing({ ...e, targets_jsonb: next });
                                   }}>
                                     {availableTargetModels.map((m) => (
@@ -501,12 +511,16 @@ export default function RoutesPage() {
                                   <input className="input w-full min-w-0" type="number" min={0} placeholder="weight" value={target.weight}
                                     onChange={(ev) => {
                                       const next = [...e.targets_jsonb];
-                                      next[index] = { ...target, weight: +ev.target.value, label };
+                                      next[index] = { ...target, weight: +ev.target.value, label: storedTargetLabel(label) };
                                       setEditing({ ...e, targets_jsonb: next });
                                     }} />
                                   <button className="btn-danger w-full sm:w-auto" onClick={() => {
                                     const next = e.targets_jsonb.filter((_, j) => j !== index);
-                                    setEditing({ ...e, targets_jsonb: next });
+                                    setEditing({
+                                      ...e,
+                                      targets_jsonb: next,
+                                      fallback_model_id: next.length ? e.fallback_model_id : null,
+                                    });
                                   }}>×</button>
                                 </div>
                                 {renderTargetMeta(selected)}
@@ -522,6 +536,40 @@ export default function RoutesPage() {
             </div>
           );
         };
+
+        const renderFallbackControl = () => (
+          <div className="rounded border border-gray-200 bg-gray-50 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={e.fallback_model_id != null}
+                disabled={!firstTargetModelId || e.targets_jsonb.length === 0}
+                onChange={(ev) => setEditing({
+                  ...e,
+                  fallback_model_id: ev.target.checked ? firstTargetModelId : null,
+                })}
+              />
+              Retry a fallback model
+            </label>
+            {e.fallback_model_id != null && (
+              <div className="mt-3">
+                <label className="label">Fallback model</label>
+                <select
+                  className="input w-full"
+                  value={e.fallback_model_id}
+                  onChange={(ev) => setEditing({ ...e, fallback_model_id: +ev.target.value })}
+                >
+                  {availableTargetModels.map((model) => (
+                    <option key={model.id} value={model.id}>{modelOptionLabel(model)}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Any model of this API type can be selected, including a target model. It is skipped when already selected as the primary.
+                </p>
+              </div>
+            )}
+          </div>
+        );
 
         return (
         <Modal
@@ -547,7 +595,7 @@ export default function RoutesPage() {
               <select className="input w-full" value={e.modality || "chat"}
                 onChange={(ev) => {
                   const mod = ev.target.value as R["modality"];
-                  setEditing({ ...e, modality: mod, targets_jsonb: [], exposed_protocols: mod === "chat" ? routeProtocols(e).filter((p) => p === "openai.chat" || p === "openai.responses" || p === "anthropic.messages") : [mod === "image" ? "openai.images" : "openai.embeddings"] });
+                  setEditing({ ...e, modality: mod, targets_jsonb: [], fallback_model_id: null, exposed_protocols: mod === "chat" ? routeProtocols(e).filter((p) => p === "openai.chat" || p === "openai.responses" || p === "anthropic.messages") : [mod === "image" ? "openai.images" : "openai.embeddings"] });
                 }}>
                 <option value="chat">chat (text generation)</option>
                 <option value="embedding">embedding</option>
@@ -589,13 +637,15 @@ export default function RoutesPage() {
             <div>
               <label className="label">Strategy</label>
               <select className="input w-full" value={e.strategy}
-                onChange={(ev) => setEditing({ ...e, strategy: ev.target.value as R["strategy"] })}>
+                onChange={(ev) => {
+                  const strategy = ev.target.value as R["strategy"];
+                  setEditing({ ...e, strategy });
+                }}>
                 <option value="weighted">weighted</option>
-                <option value="fallback">fallback</option>
                 <option value="smart">smart</option>
               </select>
               <p className="mt-1 text-xs text-gray-500">{STRATEGY_DESC[e.strategy].body}</p>
-              {e.targets_jsonb.length <= 1 && (
+              {e.targets_jsonb.length <= 1 && e.fallback_model_id == null && (
                 <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
                   Only one target — strategy is effectively a no-op. Add more targets to make {e.strategy} meaningful.
                 </p>
@@ -604,11 +654,13 @@ export default function RoutesPage() {
 
             {e.strategy !== "smart" && renderTargets()}
 
+            {e.strategy !== "smart" && renderFallbackControl()}
+
             {e.strategy === "smart" && (
               <div className="space-y-4 rounded border bg-gray-50 p-3">
                 <div className="text-sm font-semibold">Smart routing decision</div>
                 <p className="text-xs text-gray-500">
-                  Pick <b>one</b> deciding mechanism — rules <i>or</i> embedding classifier. Whichever you choose emits a <i>label</i> that you assign to a target below. Unmatched requests fall through to <code>default</code>.
+                  Pick <b>one</b> deciding mechanism — rules <i>or</i> embedding classifier. It emits a <i>label</i> assigned to targets below. Unmatched requests use the <code>default</code> group.
                 </p>
 
                 {(() => {
@@ -679,7 +731,7 @@ export default function RoutesPage() {
                   </div>
 
                   {(e.smart_rules_jsonb || []).length === 0 && (
-                    <p className="text-xs text-gray-500">No rules yet — every request will use the <code>default</code> label.</p>
+                    <p className="text-xs text-gray-500">No rules yet — every request will use the <code>default</code> group.</p>
                   )}
 
                   {(e.smart_rules_jsonb || []).map((rule, i) => {
@@ -865,7 +917,7 @@ export default function RoutesPage() {
                         value={e.smart_score_threshold ?? 55}
                         onChange={(ev) => setEditing({ ...e, smart_score_threshold: +ev.target.value })} />
                       <p className="mt-1 text-xs text-gray-500">
-                        Cosine similarity cutoff. Below this, fall through to <code>default</code>. 55% is a sensible starting point — raise to be stricter, lower to route more aggressively.
+                        Cosine similarity cutoff. Below this, use the <code>default</code> group. 55% is a sensible starting point — raise to be stricter, lower to route more aggressively.
                       </p>
                     </div>
                   </>
@@ -875,12 +927,14 @@ export default function RoutesPage() {
                   Active labels: {allLabels.map((l) => (
                     <span key={l} className="ml-1 rounded bg-gray-200 px-1.5 py-0.5 font-mono">{l}</span>
                   ))}
-                  <span className="ml-2 italic">(<code>default</code> is the always-on fallback)</span>
+                  <span className="ml-2 italic">(targets without a label belong to <code>default</code>)</span>
                 </p>
               </div>
             )}
 
             {e.strategy === "smart" && renderSmartTargets()}
+
+            {e.strategy === "smart" && renderFallbackControl()}
 
             <div>
               <label className="label">Scope (visibility)</label>

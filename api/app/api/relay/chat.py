@@ -45,14 +45,10 @@ async def _load_route(
             status.HTTP_404_NOT_FOUND,
             f"model {user_facing_model} is not available on the {expected_protocol} protocol",
         )
-    target_ids = [int(t["model_id"]) for t in (policy.targets_jsonb or [])]
-    if not target_ids:
+    resources = await providers.load_route_resources(db, policy)
+    if resources is None:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "route has no targets")
-    models = (await db.execute(select(Model).where(Model.id.in_(target_ids)))).scalars().all()
-    models_by_id = {m.id: m for m in models}
-    channel_ids = {m.channel_id for m in models}
-    channels = (await db.execute(select(Channel).where(Channel.id.in_(channel_ids)))).scalars().all()
-    channels_by_id = {c.id: c for c in channels}
+    models_by_id, channels_by_id = resources
     return policy, models_by_id, channels_by_id
 
 

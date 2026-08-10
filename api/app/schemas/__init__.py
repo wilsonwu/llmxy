@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, computed_field
 
@@ -167,7 +167,6 @@ class ModelOut(ModelIn):
 class RouteTarget(BaseModel):
     model_id: int
     weight: int = 1
-    fallback_order: int = 0
     label: Optional[str] = None  # for smart strategy: matches rule/classifier output
 
 
@@ -194,10 +193,10 @@ class RoutePolicyIn(BaseModel):
     user_facing_model: str
     modality: str = "chat"  # chat | embedding | image
     exposed_protocols: list[str] = Field(default_factory=lambda: ["openai.chat"])
-    strategy: str = "weighted"  # weighted/smart/fallback
+    strategy: Literal["weighted", "smart"] = "weighted"
     targets_jsonb: list[RouteTarget] = []
+    fallback_model_id: Optional[int] = None
     smart_rules_jsonb: list[RouteRule] = []
-    smart_default_label: Optional[str] = None
     smart_embedding_model_id: Optional[int] = None
     smart_exemplars_jsonb: list[RouteExemplar] = []
     smart_score_threshold: int = 55  # cosine similarity percent, 0-100
@@ -212,8 +211,8 @@ class RoutePolicyOut(BaseModel):
     exposed_protocols: list[str] = Field(default_factory=lambda: ["openai.chat"])
     strategy: str
     targets_jsonb: list[dict]
+    fallback_model_id: Optional[int] = None
     smart_rules_jsonb: list[dict] = []
-    smart_default_label: Optional[str] = None
     smart_embedding_model_id: Optional[int] = None
     smart_exemplars_jsonb: list[dict] = []
     smart_score_threshold: int = 55

@@ -66,7 +66,6 @@ class PaymentChannel(str, enum.Enum):
 class RouteStrategy(str, enum.Enum):
     weighted = "weighted"
     smart = "smart"
-    fallback = "fallback"
 
 
 class RouteScope(str, enum.Enum):
@@ -269,22 +268,28 @@ class RoutePolicy(Base):
     exposed_protocols: Mapped[list] = mapped_column(JSON, default=lambda: ["openai.chat"], server_default='["openai.chat"]', nullable=False)
     strategy: Mapped[RouteStrategy] = mapped_column(SAEnum(RouteStrategy), default=RouteStrategy.weighted)
     targets_jsonb: Mapped[list] = mapped_column(JSON, default=list)
-    # targets: [{model_id:int, weight:int, fallback_order:int, label?:str}]
+    # targets: [{model_id:int, weight:int, label?:str}]
+    # Both strategies may retry one optional model after the selected primary fails.
+    # Smart targets without a label belong to the implicit default label.
+    # It may also be present in targets_jsonb; the router skips it when it was
+    # already selected as the primary for this request.
+    fallback_model_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+    )
     # ---- smart-strategy config (ignored unless strategy=smart) ----
     smart_rules_jsonb: Mapped[list] = mapped_column(JSON, default=list)
     # rules: ordered list; first hit wins. Forms:
     #   {"type":"tokens","threshold":500,"gt_label":"strong","lte_label":"cheap"}
     #   {"type":"keyword","pattern":"<python-regex>","label":"<label>"}
     #   {"type":"code_block","label":"<label>"}
-    smart_default_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # Embedding-based classifier: model used to embed prompts + exemplars.
     smart_embedding_model_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
     # exemplars: [{"label":"strong","text":"…"}, ...] — 3-10 per label is plenty.
     smart_exemplars_jsonb: Mapped[list] = mapped_column(JSON, default=list)
-    # Cosine similarity cutoff as integer percent (0-100). Below this, fall through
-    # to smart_default_label. 55 ≈ "moderately confident" for sentence-level embeddings.
+    # Cosine similarity cutoff as integer percent (0-100). Below this, use the
+    # implicit default target label. 55 ≈ "moderately confident" for sentence-level embeddings.
     smart_score_threshold: Mapped[int] = mapped_column(Integer, default=55, nullable=False)
     # Bumped on every exemplar / embedding-model change → invalidates Redis cache.
     smart_embedding_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

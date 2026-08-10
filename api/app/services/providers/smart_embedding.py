@@ -290,7 +290,7 @@ async def classify(
     """Return (label_or_None, best_score_0to1, usage).
 
     label is None when no exemplars resolved or best score < policy threshold;
-    caller falls back to smart_default_label.
+    caller uses the route's implicit default target label.
     """
     text = (prompt_text or "").strip()
     if not text:

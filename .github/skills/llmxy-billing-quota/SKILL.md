@@ -33,8 +33,9 @@ Use this skill for changes that can affect user balances, subscription quota, AP
 ## API-direct Versus Envoy
 
 1. API-direct relay endpoints charge and log in the request path after the upstream succeeds.
-2. Envoy does auth/route checks through ext_proc and bills asynchronously from ALS usage events. Do not add a second charge in the translator path for the same Envoy request.
-3. ALS billing should write the same core facts as API-direct: user, API key, model, public model, upstream model, prompt/completion tokens, cost, request ID, latency/status, and resolved smart label where available.
+2. Envoy does auth/route checks through ext_proc. Translator-backed requests carry `x-llmxy-billed-sync=true`; the translator charges and logs only the successful candidate, and ALS skips these marked requests.
+3. ALS bills only unmarked Envoy requests. Never bill the same request in both the translator and ALS.
+4. Both billing paths should write the same core facts as API-direct: user, API key, model, public model, upstream model, prompt/completion tokens, cost, request ID, latency/status, and resolved smart label where available.
 
 ## Plans, Orders, And Payments
 
@@ -47,7 +48,7 @@ Use this skill for changes that can affect user balances, subscription quota, AP
 
 1. Run `cd api && pytest -q tests/test_billing.py` for formula and billing behavior touched by the change.
 2. Run relay or smart-routing tests when charges depend on provider usage, streaming final chunks, or smart classifier usage.
-3. For schema changes, create and run an Alembic migration: `cd api && alembic upgrade head`.
+3. For schema changes during the current development phase, edit `api/alembic/versions/0001_initial.py` directly, reset/rebuild the development schema, then run `cd api && alembic upgrade head`; do not create later revisions.
 4. For payment or quota changes that frontends expose, type-check the touched app with `npx tsc --noEmit --incremental false`.
 
 ## Done Criteria

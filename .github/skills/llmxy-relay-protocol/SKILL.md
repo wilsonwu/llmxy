@@ -17,8 +17,9 @@ Use this skill for changes that affect how client requests enter `/v1/*`, how ro
 
 2. Trace route selection before touching adapters.
    - `_load_route` rejects disabled, private, wrong-modality, and wrong-protocol routes.
-   - `select_route` handles `weighted`, `fallback`, and `smart` strategies.
-   - Smart rules may pick a target label by preset, token count, keyword, code block, geo, or embedding classifier. Fallback chains stay within the chosen label when possible.
+   - `select_route` handles `weighted` and `smart` strategies.
+   - Both strategies choose one primary target and may retry the optional single `fallback_model_id`; that model may also be a target but must not be attempted twice in one request.
+   - Smart rules may pick a target label by preset, token count, keyword, code block, geo, or embedding classifier. Targets without a label belong to `default`, which handles unmatched selection. An optional fallback handles primary failure only.
 
 3. Resolve protocol and connector separately.
    - Effective semantic protocol comes from `Model.upstream_protocol` or `Channel.provider_type`.
